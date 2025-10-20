@@ -30,12 +30,19 @@ extern "C" {
 #define DD_SERVER_TICK_SPEED 50
 #define DD_MAX_TIMELINE_MARKERS 64
 #define DD_MAX_SNAPSHOT_ITEMS 1024
-#define DD_MAX_SNAPSHOT_SIZE (DD_MAX_SNAPSHOT_ITEMS * 128)
+#define DD_MAX_SNAPSHOT_SIZE (DD_MAX_SNAPSHOT_ITEMS * 256) // Increased size for safety
 #define DD_MAX_NETOBJSIZES 64
 #define DD_MAX_PAYLOAD (DD_MAX_SNAPSHOT_SIZE + 4096)
+#define DD_MAX_TYPE 0x7fff
 
 /* Demo chunk types that can be returned by the reader */
-enum { DD_CHUNK_INVALID = 0, DD_CHUNK_SNAP, DD_CHUNK_SNAP_DELTA, DD_CHUNK_MSG, DD_CHUNK_TICK_MARKER };
+enum {
+  DD_CHUNK_INVALID = 0,
+  DD_CHUNK_SNAP,
+  DD_CHUNK_SNAP_DELTA,
+  DD_CHUNK_MSG,
+  DD_CHUNK_TICK_MARKER
+};
 
 /* Raw demo file header structure. Multi-byte fields are big-endian. */
 typedef struct {
@@ -98,6 +105,7 @@ typedef struct {
 static inline int *dd_snap_offsets(const dd_snapshot *snap) { return (int *)(snap + 1); }
 static inline char *dd_snap_data_start(const dd_snapshot *snap) { return (char *)(dd_snap_offsets(snap) + snap->num_items); }
 static inline const dd_snap_item *dd_snap_get_item(const dd_snapshot *snap, int index) {
+  if (index < 0 || index >= snap->num_items) return NULL;
   return (const dd_snap_item *)(dd_snap_data_start(snap) + dd_snap_offsets(snap)[index]);
 }
 int dd_snap_get_item_size(const dd_snapshot *snap, int index);
@@ -105,11 +113,14 @@ const dd_snap_item *dd_snap_find_item(const dd_snapshot *snap, int type, int id)
 
 /******************************************************************************
  *
- * 0.6 PROTOCOL DEFINITIONS
+ * 0.6 & 0.7 PROTOCOL DEFINITIONS (although we don't support 0.7 demos yet)
  *
  ******************************************************************************/
 
-/* Object and Event types */
+#define DD_GAMEINFO_CURVERSION 10
+#define OFFSET_UUID 256
+
+/* Vanilla Object and Event types */
 enum {
   DD_NETOBJTYPE_EX,
   DD_NETOBJTYPE_PLAYERINPUT,
@@ -132,8 +143,13 @@ enum {
   DD_NETEVENTTYPE_SOUNDGLOBAL,
   DD_NETEVENTTYPE_SOUNDWORLD,
   DD_NETEVENTTYPE_DAMAGEIND,
-  /* DDNet extensions */
-  DD_NETOBJTYPE_DDNETCHARACTER = 21,
+  DD_NUM_VANILLA_NETOBJTYPES
+};
+
+/* Extended Object and Event types */
+enum {
+  DD_NETOBJTYPE_MYOWNOBJECT = OFFSET_UUID,
+  DD_NETOBJTYPE_DDNETCHARACTER,
   DD_NETOBJTYPE_DDNETPLAYER,
   DD_NETOBJTYPE_GAMEINFOEX,
   DD_NETOBJTYPE_DDRACEPROJECTILE,
@@ -143,11 +159,92 @@ enum {
   DD_NETOBJTYPE_DDNETSPECTATORINFO,
   DD_NETEVENTTYPE_BIRTHDAY,
   DD_NETEVENTTYPE_FINISH,
+  DD_NETOBJTYPE_MYOWNEVENT,
   DD_NETOBJTYPE_SPECCHAR,
   DD_NETOBJTYPE_SWITCHSTATE,
   DD_NETOBJTYPE_ENTITYEX,
   DD_NETEVENTTYPE_MAPSOUNDWORLD,
-  DD_NUM_NETOBJTYPES
+  DD_OFFSET_NETMSGTYPE_UUID
+};
+
+/* Vanilla Message types */
+enum {
+  DD_NETMSGTYPE_EX,
+  DD_NETMSGTYPE_SV_MOTD,
+  DD_NETMSGTYPE_SV_BROADCAST,
+  DD_NETMSGTYPE_SV_CHAT,
+  DD_NETMSGTYPE_SV_KILLMSG,
+  DD_NETMSGTYPE_SV_SOUNDGLOBAL,
+  DD_NETMSGTYPE_SV_TUNEPARAMS,
+  DD_NETMSGTYPE_UNUSED,
+  DD_NETMSGTYPE_SV_READYTOENTER,
+  DD_NETMSGTYPE_SV_WEAPONPICKUP,
+  DD_NETMSGTYPE_SV_EMOTICON,
+  DD_NETMSGTYPE_SV_VOTECLEAROPTIONS,
+  DD_NETMSGTYPE_SV_VOTEOPTIONLISTADD,
+  DD_NETMSGTYPE_SV_VOTEOPTIONADD,
+  DD_NETMSGTYPE_SV_VOTEOPTIONREMOVE,
+  DD_NETMSGTYPE_SV_VOTESET,
+  DD_NETMSGTYPE_SV_VOTESTATUS,
+  DD_NETMSGTYPE_CL_SAY,
+  DD_NETMSGTYPE_CL_SETTEAM,
+  DD_NETMSGTYPE_CL_SETSPECTATORMODE,
+  DD_NETMSGTYPE_CL_STARTINFO,
+  DD_NETMSGTYPE_CL_CHANGEINFO,
+  DD_NETMSGTYPE_CL_KILL,
+  DD_NETMSGTYPE_CL_EMOTICON,
+  DD_NETMSGTYPE_CL_VOTE,
+  DD_NETMSGTYPE_CL_CALLVOTE,
+  DD_NETMSGTYPE_CL_ISDDNETLEGACY,
+  DD_NETMSGTYPE_SV_DDRACETIMELEGACY,
+  DD_NETMSGTYPE_SV_RECORDLEGACY,
+  DD_NETMSGTYPE_UNUSED2,
+  DD_NETMSGTYPE_SV_TEAMSSTATELEGACY,
+  DD_NETMSGTYPE_CL_SHOWOTHERSLEGACY,
+  DD_NUM_VANILLA_NETMSGTYPES
+};
+
+/* Extended Message types */
+enum {
+  DD_NETMSG_WHATIS = DD_OFFSET_NETMSGTYPE_UUID,
+  DD_NETMSG_ITIS,
+  DD_NETMSG_IDONTKNOW,
+  DD_NETMSG_RCONTYPE,
+  DD_NETMSG_MAP_DETAILS,
+  DD_NETMSG_CAPABILITIES,
+  DD_NETMSG_CLIENTVER,
+  DD_NETMSG_PINGEX,
+  DD_NETMSG_PONGEX,
+  DD_NETMSG_CHECKSUM_REQUEST,
+  DD_NETMSG_CHECKSUM_RESPONSE,
+  DD_NETMSG_CHECKSUM_ERROR,
+  DD_NETMSG_REDIRECT,
+  DD_NETMSG_RCON_CMD_GROUP_START,
+  DD_NETMSG_RCON_CMD_GROUP_END,
+  DD_NETMSG_MAP_RELOAD,
+  DD_NETMSG_RECONNECT,
+  DD_NETMSG_SV_MAPLIST_ADD,
+  DD_NETMSG_SV_MAPLIST_GROUP_START,
+  DD_NETMSG_SV_MAPLIST_GROUP_END,
+  DD_NETMSGTYPE_SV_MYOWNMESSAGE,
+  DD_NETMSGTYPE_CL_SHOWDISTANCE,
+  DD_NETMSGTYPE_CL_SHOWOTHERS,
+  DD_NETMSGTYPE_CL_CAMERAINFO,
+  DD_NETMSGTYPE_SV_TEAMSSTATE,
+  DD_NETMSGTYPE_SV_DDRACETIME,
+  DD_NETMSGTYPE_SV_RECORD,
+  DD_NETMSGTYPE_SV_KILLMSGTEAM,
+  DD_NETMSGTYPE_SV_YOURVOTE,
+  DD_NETMSGTYPE_SV_RACEFINISH,
+  DD_NETMSGTYPE_SV_COMMANDINFO,
+  DD_NETMSGTYPE_SV_COMMANDINFOREMOVE,
+  DD_NETMSGTYPE_SV_VOTEOPTIONGROUPSTART,
+  DD_NETMSGTYPE_SV_VOTEOPTIONGROUPEND,
+  DD_NETMSGTYPE_SV_COMMANDINFOGROUPSTART,
+  DD_NETMSGTYPE_SV_COMMANDINFOGROUPEND,
+  DD_NETMSGTYPE_SV_CHANGEINFOCOOLDOWN,
+  DD_NETMSGTYPE_SV_MAPSOUNDGLOBAL,
+  DD_NETMSGTYPE_SV_PREINPUT,
 };
 
 /* Laser subtypes (used in dd_netobj_ddnet_laser) */
@@ -268,7 +365,15 @@ enum {
 };
 
 /* Emotes */
-enum { DD_EMOTE_NORMAL, DD_EMOTE_PAIN, DD_EMOTE_HAPPY, DD_EMOTE_SURPRISE, DD_EMOTE_ANGRY, DD_EMOTE_BLINK, DD_NUM_EMOTES };
+enum {
+  DD_EMOTE_NORMAL,
+  DD_EMOTE_PAIN,
+  DD_EMOTE_HAPPY,
+  DD_EMOTE_SURPRISE,
+  DD_EMOTE_ANGRY,
+  DD_EMOTE_BLINK,
+  DD_NUM_EMOTES
+};
 
 /******************************************************************************
  *
@@ -624,6 +729,125 @@ typedef struct {
 
 /******************************************************************************
  *
+ * NETWORK MESSAGE STRUCTURES
+ *
+ ******************************************************************************/
+typedef struct {
+  const char *m_pMessage;
+} dd_netmsg_sv_motd;
+typedef struct {
+  const char *m_pMessage;
+} dd_netmsg_sv_broadcast;
+typedef struct {
+  int m_Team;
+  int m_ClientId;
+  const char *m_pMessage;
+} dd_netmsg_sv_chat;
+typedef struct {
+  int m_Killer;
+  int m_Victim;
+  int m_Weapon;
+  int m_ModeSpecial;
+} dd_netmsg_sv_killmsg;
+typedef struct {
+  int m_SoundId;
+} dd_netmsg_sv_sound_global;
+typedef struct {
+  int m_Weapon;
+} dd_netmsg_sv_weaponpickup;
+typedef struct {
+  int m_ClientId;
+  int m_Emoticon;
+} dd_netmsg_sv_emoticon;
+typedef struct {
+  int m_NumOptions;
+  const char *m_pDescription0;
+  const char *m_pDescription1;
+  const char *m_pDescription2;
+  const char *m_pDescription3;
+  const char *m_pDescription4;
+  const char *m_pDescription5;
+  const char *m_pDescription6;
+  const char *m_pDescription7;
+  const char *m_pDescription8;
+  const char *m_pDescription9;
+  const char *m_pDescription10;
+  const char *m_pDescription11;
+  const char *m_pDescription12;
+  const char *m_pDescription13;
+  const char *m_pDescription14;
+} dd_netmsg_sv_vote_option_list_add;
+typedef struct {
+  const char *m_pDescription;
+} dd_netmsg_sv_vote_option_add;
+typedef struct {
+  const char *m_pDescription;
+} dd_netmsg_sv_vote_option_remove;
+typedef struct {
+  int m_Timeout;
+  const char *m_pDescription;
+  const char *m_pReason;
+} dd_netmsg_sv_vote_set;
+typedef struct {
+  int m_Yes;
+  int m_No;
+  int m_Pass;
+  int m_Total;
+} dd_netmsg_sv_vote_status;
+typedef struct {
+  int m_Team;
+  const char *m_pMessage;
+} dd_netmsg_cl_say;
+typedef struct {
+  int m_Team;
+} dd_netmsg_cl_set_team;
+typedef struct {
+  int m_SpectatorId;
+} dd_netmsg_cl_set_spectator_mode;
+typedef struct {
+  const char *m_pName;
+  const char *m_pClan;
+  int m_Country;
+  const char *m_pSkin;
+  int m_UseCustomColor;
+  int m_ColorBody;
+  int m_ColorFeet;
+} dd_netmsg_cl_start_info;
+typedef struct {
+  const char *m_pName;
+  const char *m_pClan;
+  int m_Country;
+  const char *m_pSkin;
+  int m_UseCustomColor;
+  int m_ColorBody;
+  int m_ColorFeet;
+} dd_netmsg_cl_change_info;
+typedef struct {
+  int m_Emoticon;
+} dd_netmsg_cl_emoticon;
+typedef struct {
+  int m_Vote;
+} dd_netmsg_cl_vote;
+typedef struct {
+  const char *m_pType;
+  const char *m_pValue;
+  const char *m_pReason;
+} dd_netmsg_cl_call_vote;
+typedef struct {
+  int m_Time;
+  int m_Check;
+  int m_Finish;
+} dd_netmsg_sv_ddrace_time_legacy;
+typedef struct {
+  int m_ServerTimeBest;
+  int m_PlayerTimeBest;
+} dd_netmsg_sv_record_legacy;
+typedef struct {
+  int m_Show;
+} dd_netmsg_cl_show_others_legacy;
+
+/******************************************************************************
+ *
  * API
  *
  ******************************************************************************/
@@ -702,6 +926,12 @@ static const uint8_t DD_SHA256_EXTENSION[16] = {0x6b, 0xe6, 0xda, 0x4a, 0xce, 0x
 static const unsigned char DD_DEMO_VERSION = 6;
 static const unsigned char DD_DEMO_VERSION_TICKCOMPRESSION = 5;
 
+// defines for extended types
+enum {
+  OFFSET_UUID_TYPE = 0x4000,
+  MAX_EXTENDED_ITEM_TYPES = 64
+};
+
 typedef struct {
   int num_deleted_items;
   int num_update_items;
@@ -731,6 +961,45 @@ static void dd_str_timestamp(char *buffer, size_t buffer_size) {
 
 /******************************************************************************
  *
+ * UUID MANAGER
+ *
+ ******************************************************************************/
+
+typedef struct {
+  int type_id;
+  uint8_t uuid[16];
+} dd_uuid_entry;
+
+static const dd_uuid_entry g_dd_uuids[] = {
+    {DD_NETOBJTYPE_MYOWNOBJECT, {0x0d, 0xc7, 0x7a, 0x02, 0xbf, 0xee, 0x3a, 0x53, 0xac, 0x8e, 0x0b, 0xb0, 0x24, 0x1b, 0xd7, 0x22}},
+    {DD_NETOBJTYPE_DDNETCHARACTER, {0x76, 0xce, 0x45, 0x5b, 0xf9, 0xeb, 0x3a, 0x48, 0xad, 0xd7, 0xe0, 0x4b, 0x94, 0x1d, 0x04, 0x5c}},
+    {DD_NETOBJTYPE_DDNETPLAYER, {0x22, 0xca, 0x93, 0x8d, 0x13, 0x80, 0x3e, 0x2b, 0x9e, 0x7b, 0xd2, 0x55, 0x8e, 0xa6, 0xbe, 0x11}},
+    {DD_NETOBJTYPE_GAMEINFOEX, {0x93, 0x3d, 0xea, 0x6a, 0xda, 0x79, 0x30, 0xea, 0xa9, 0x8f, 0x8a, 0xf0, 0x36, 0x89, 0xa9, 0x45}},
+    {DD_NETOBJTYPE_DDRACEPROJECTILE, {0x0e, 0x6d, 0xb8, 0x5c, 0x2b, 0x61, 0x38, 0x6f, 0xbb, 0xf2, 0xd0, 0xd0, 0x47, 0x1b, 0x92, 0x72}},
+    {DD_NETOBJTYPE_DDNETLASER, {0x29, 0xde, 0x68, 0xa2, 0x69, 0x28, 0x31, 0xb8, 0x83, 0x60, 0xa2, 0x30, 0x7e, 0x0d, 0x84, 0x4f}},
+    {DD_NETOBJTYPE_DDNETPROJECTILE, {0x65, 0x50, 0xfb, 0xce, 0xf3, 0x17, 0x3b, 0x31, 0x8f, 0xfe, 0xd2, 0xb3, 0x7f, 0x3a, 0xb4, 0x0e}},
+    {DD_NETOBJTYPE_DDNETPICKUP, {0xea, 0x5e, 0x4a, 0x51, 0x58, 0xfb, 0x36, 0x84, 0x96, 0xe4, 0xe0, 0xd2, 0x67, 0xf4, 0xca, 0x65}},
+    {DD_NETOBJTYPE_DDNETSPECTATORINFO, {0xd1, 0x33, 0x07, 0xb2, 0x9a, 0x19, 0x37, 0xcb, 0x8f, 0x8c, 0x07, 0xc7, 0x18, 0x52, 0x18, 0x83}},
+    {DD_NETEVENTTYPE_BIRTHDAY, {0x1f, 0xd3, 0x57, 0x46, 0x62, 0x63, 0x35, 0x8c, 0xb4, 0xd6, 0x6e, 0xf6, 0x0e, 0x0e, 0xfa, 0xaa}},
+    {DD_NETEVENTTYPE_FINISH, {0x68, 0xbf, 0x89, 0x39, 0xef, 0x55, 0x38, 0x78, 0x90, 0x82, 0x13, 0x52, 0x7e, 0xb0, 0xa5, 0x97}},
+    {DD_NETOBJTYPE_MYOWNEVENT, {0x0c, 0x4f, 0xd2, 0x7d, 0x47, 0xe3, 0x38, 0x71, 0xa2, 0x26, 0x9f, 0x41, 0x74, 0x86, 0xa3, 0x11}},
+    {DD_NETOBJTYPE_SPECCHAR, {0x4b, 0x80, 0x1c, 0x74, 0xe2, 0x4c, 0x3c, 0xe0, 0xb9, 0x2c, 0xb7, 0x54, 0xd0, 0x2c, 0xfc, 0x8a}},
+    {DD_NETOBJTYPE_SWITCHSTATE, {0xec, 0x15, 0xe6, 0x69, 0xce, 0x11, 0x33, 0x67, 0xae, 0x8e, 0xb9, 0x0e, 0x5b, 0x27, 0xb9, 0xd5}},
+    {DD_NETOBJTYPE_ENTITYEX, {0x2d, 0xe9, 0xae, 0xc3, 0x32, 0xe4, 0x39, 0x86, 0x8f, 0x7e, 0xe7, 0x45, 0x9d, 0xa7, 0xf5, 0x35}},
+    {DD_NETEVENTTYPE_MAPSOUNDWORLD, {0x54, 0xec, 0xad, 0x2e, 0xbf, 0xad, 0x3b, 0xe5, 0x89, 0x03, 0x62, 0x1b, 0xa0, 0x52, 0x45, 0x8e}}};
+
+static bool dd_uuid_get(int type_id, uint8_t uuid_out[16]) {
+  for (size_t i = 0; i < sizeof(g_dd_uuids) / sizeof(g_dd_uuids[0]); ++i) {
+    if (g_dd_uuids[i].type_id == type_id) {
+      memcpy(uuid_out, g_dd_uuids[i].uuid, 16);
+      return true;
+    }
+  }
+  return false;
+}
+
+/******************************************************************************
+ *
  * COMPRESSION IMPLEMENTATION (VariableInt + Huffman)
  *
  ******************************************************************************/
@@ -756,16 +1025,15 @@ typedef struct {
 } dd_huffman_state;
 
 static const unsigned dd_huffman_freq_table[DD_HUFFMAN_MAX_SYMBOLS] = {
-    1 << 30, 4545, 2657, 431, 1950, 919, 444, 482, 2244, 617, 838, 542, 715, 1814, 304, 240, 754, 212, 647,  186, 283, 131, 146, 166, 543,  164,
-    167,     136,  179,  859, 363,  113, 157, 154, 204,  108, 137, 180, 202, 176,  872, 404, 168, 134, 151,  111, 113, 109, 120, 126, 129,  100,
-    41,      20,   16,   22,  18,   18,  17,  19,  16,   37,  13,  21,  362, 166,  99,  78,  95,  88,  81,   70,  83,  284, 91,  187, 77,   68,
-    52,      68,   59,   66,  61,   638, 71,  157, 50,   46,  69,  43,  11,  24,   13,  19,  10,  12,  12,   20,  14,  9,   20,  20,  10,   10,
-    15,      15,   12,   12,  7,    19,  15,  14,  13,   18,  35,  19,  17,  14,   8,   5,   15,  17,  9,    15,  14,  18,  8,   10,  2173, 134,
-    157,     68,   188,  60,  170,  60,  194, 62,  175,  71,  148, 67,  167, 78,   211, 67,  156, 69,  1674, 90,  174, 53,  147, 89,  181,  51,
-    174,     63,   163,  80,  167,  94,  128, 122, 223,  153, 218, 77,  200, 110,  190, 73,  174, 69,  145,  66,  277, 143, 141, 60,  136,  53,
-    180,     57,   142,  57,  158,  61,  166, 112, 152,  92,  26,  22,  21,  28,   20,  26,  30,  21,  32,   27,  20,  17,  23,  21,  30,   22,
-    22,      21,   27,   25,  17,   27,  23,  18,  39,   26,  15,  21,  12,  18,   18,  27,  20,  18,  15,   19,  11,  17,  33,  12,  18,   15,
-    19,      18,   16,   26,  17,   18,  9,   10,  25,   22,  22,  17,  20,  16,   6,   16,  15,  20,  14,   18,  24,  335, 1517};
+    1 << 30, 4545, 2657, 431,  1950, 919, 444, 482, 2244, 617, 838, 542, 715,  1814, 304, 240, 754, 212, 647, 186, 283, 131, 146, 166, 543, 164, 167, 136, 179,
+    859,     363,  113,  157,  154,  204, 108, 137, 180,  202, 176, 872, 404,  168,  134, 151, 111, 113, 109, 120, 126, 129, 100, 41,  20,  16,  22,  18,  18,
+    17,      19,   16,   37,   13,   21,  362, 166, 99,   78,  95,  88,  81,   70,   83,  284, 91,  187, 77,  68,  52,  68,  59,  66,  61,  638, 71,  157, 50,
+    46,      69,   43,   11,   24,   13,  19,  10,  12,   12,  20,  14,  9,    20,   20,  10,  10,  15,  15,  12,  12,  7,   19,  15,  14,  13,  18,  35,  19,
+    17,      14,   8,    5,    15,   17,  9,   15,  14,   18,  8,   10,  2173, 134,  157, 68,  188, 60,  170, 60,  194, 62,  175, 71,  148, 67,  167, 78,  211,
+    67,      156,  69,   1674, 90,   174, 53,  147, 89,   181, 51,  174, 63,   163,  80,  167, 94,  128, 122, 223, 153, 218, 77,  200, 110, 190, 73,  174, 69,
+    145,     66,   277,  143,  141,  60,  136, 53,  180,  57,  142, 57,  158,  61,   166, 112, 152, 92,  26,  22,  21,  28,  20,  26,  30,  21,  32,  27,  20,
+    17,      23,   21,   30,   22,   22,  21,  27,  25,   17,  27,  23,  18,   39,   26,  15,  21,  12,  18,  18,  27,  20,  18,  15,  19,  11,  17,  33,  12,
+    18,      15,   19,   18,   16,   26,  17,  18,  9,    10,  25,  22,  22,   17,   20,  16,  6,   16,  15,  20,  14,  18,  24,  335, 1517};
 
 typedef struct {
   unsigned short node_id;
@@ -1014,10 +1282,9 @@ int dd_snap_get_item_size(const dd_snapshot *snap, int index) {
 }
 
 const dd_snap_item *dd_snap_find_item(const dd_snapshot *snap, int type, int id) {
-  int key = (type << 16) | id;
   for (int i = 0; i < snap->num_items; i++) {
     const dd_snap_item *item = dd_snap_get_item(snap, i);
-    if (dd_snap_item_key(item) == key) {
+    if (dd_snap_item_type(item) == type && dd_snap_item_id(item) == id) {
       return item;
     }
   }
@@ -1029,7 +1296,24 @@ struct dd_snapshot_builder {
   int data_size;
   int offsets[DD_MAX_SNAPSHOT_ITEMS];
   int num_items;
+
+  int extended_item_types[MAX_EXTENDED_ITEM_TYPES];
+  int num_extended_item_types;
 };
+
+static int demo_sb_get_extended_item_type_index(dd_snapshot_builder *sb, int type_id, bool *is_new) {
+  *is_new = false;
+  for (int i = 0; i < sb->num_extended_item_types; i++) {
+    if (sb->extended_item_types[i] == type_id) return i;
+  }
+
+  if (sb->num_extended_item_types >= MAX_EXTENDED_ITEM_TYPES) return -1;
+
+  int index = sb->num_extended_item_types++;
+  sb->extended_item_types[index] = type_id;
+  *is_new = true;
+  return index;
+}
 
 dd_snapshot_builder *demo_sb_create() {
   dd_snapshot_builder *sb = (dd_snapshot_builder *)malloc(sizeof(dd_snapshot_builder));
@@ -1047,6 +1331,7 @@ void demo_sb_destroy(dd_snapshot_builder **sb_ptr) {
 void demo_sb_clear(dd_snapshot_builder *sb) {
   sb->data_size = 0;
   sb->num_items = 0;
+  sb->num_extended_item_types = 0;
 }
 
 void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
@@ -1054,12 +1339,52 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
     return NULL;
   }
 
+  int final_type = type;
+
+  if (type >= OFFSET_UUID) {
+    bool is_new = false;
+    int extended_index = demo_sb_get_extended_item_type_index(sb, type, &is_new);
+    if (extended_index == -1) {
+      return NULL;
+    }
+
+    if (is_new) {
+      if (sb->num_items >= DD_MAX_SNAPSHOT_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + 16 > DD_MAX_SNAPSHOT_SIZE) {
+        sb->num_extended_item_types--;
+        return NULL;
+      }
+
+      int internal_id = DD_MAX_TYPE - extended_index;
+      dd_snap_item *ex_item = (dd_snap_item *)(sb->data + sb->data_size);
+      ex_item->type_and_id = (DD_NETOBJTYPE_EX << 16) | internal_id;
+      sb->offsets[sb->num_items] = sb->data_size;
+      sb->data_size += sizeof(dd_snap_item) + 16;
+      sb->num_items++;
+
+      int *uuid_data = dd_snap_item_data(ex_item);
+      uint8_t uuid[16];
+      if (dd_uuid_get(type, uuid)) {
+        uuid_data[0] = dd_be_to_uint(uuid);
+        uuid_data[1] = dd_be_to_uint(uuid + 4);
+        uuid_data[2] = dd_be_to_uint(uuid + 8);
+        uuid_data[3] = dd_be_to_uint(uuid + 12);
+      } else {
+        memset(uuid_data, 0, 16);
+      }
+    }
+
+    final_type = DD_MAX_TYPE - extended_index;
+  }
+
   dd_snap_item *obj = (dd_snap_item *)(sb->data + sb->data_size);
-  obj->type_and_id = (type << 16) | id;
+  obj->type_and_id = (final_type << 16) | id;
   sb->offsets[sb->num_items] = sb->data_size;
   sb->data_size += sizeof(dd_snap_item) + size;
   sb->num_items++;
-  return (void *)dd_snap_item_data(obj);
+
+  void *p_data = (void *)dd_snap_item_data(obj);
+  memset(p_data, 0, size);
+  return p_data;
 }
 
 int demo_sb_finish(dd_snapshot_builder *sb, void *snap_data) {
@@ -1073,7 +1398,7 @@ int demo_sb_finish(dd_snapshot_builder *sb, void *snap_data) {
   memcpy(dd_snap_offsets(snap), sb->offsets, sizeof(int) * sb->num_items);
   memcpy(dd_snap_data_start(snap), sb->data, sb->data_size);
 
-  return total_size;
+  return (int)total_size;
 }
 
 /******************************************************************************
@@ -1091,12 +1416,16 @@ struct dd_demo_writer {
   int timeline_markers[DD_MAX_TIMELINE_MARKERS];
   int num_timeline_markers;
   dd_huffman_state huffman;
+  short item_sizes[DD_MAX_NETOBJSIZES];
 };
+
+static void dd_writer_init_netobj_sizes(dd_demo_writer *dw);
 
 dd_demo_writer *demo_w_create() {
   dd_demo_writer *dw = (dd_demo_writer *)calloc(1, sizeof(dd_demo_writer));
   if (!dw) return NULL;
   dd_huffman_init(&dw->huffman);
+  dd_writer_init_netobj_sizes(dw);
   return dw;
 }
 
@@ -1122,7 +1451,7 @@ bool demo_w_begin(dd_demo_writer *dw, FILE *f, const char *map_name, uint32_t ma
   memset(&header, 0, sizeof(header));
   memcpy(header.marker, DD_HEADER_MARKER, sizeof(DD_HEADER_MARKER));
   header.version = DD_DEMO_VERSION;
-  strncpy(header.net_version, "0.6 626fce9a778df4d4", sizeof(header.net_version) - 1); /* DDNet 0.6 */
+  strncpy(header.net_version, "0.6 626fce9a778df4d4", sizeof(header.net_version) - 1);
   strncpy(header.map_name, map_name, sizeof(header.map_name) - 1);
   dd_uint_to_be(header.map_crc, map_crc);
   strncpy(header.type, type, sizeof(header.type) - 1);
@@ -1175,12 +1504,14 @@ static void demo_w_write_chunk_header(dd_demo_writer *dw, int type, int size) {
 
 static void demo_w_write_data(dd_demo_writer *dw, int type, const void *data, int size) {
   uint8_t compressed_buf[DD_MAX_PAYLOAD];
+  uint8_t *padded_data = NULL;
 
   int padded_size = size;
-  while (padded_size & 3)
-    padded_size++;
+  if (size % 4 != 0) {
+    padded_size = size + (4 - (size % 4));
+  }
 
-  uint8_t *padded_data = (uint8_t *)malloc(padded_size);
+  padded_data = (uint8_t *)malloc(padded_size);
   if (!padded_data) return;
   memcpy(padded_data, data, size);
   memset(padded_data + size, 0, padded_size - size);
@@ -1212,7 +1543,7 @@ static void demo_w_write_tickmarker(dd_demo_writer *dw, int tick, bool keyframe)
 static int diff_item(const int *past, const int *current, int *out, int size) {
   int needed = 0;
   while (size--) {
-    *out = (unsigned)*current - (unsigned)*past;
+    *out = (unsigned int)*current - (unsigned int)*past;
     needed |= *out;
     out++;
     past++;
@@ -1252,21 +1583,28 @@ bool demo_w_write_snap(dd_demo_writer *dw, int tick, const void *data, int size)
 
     for (int i = 0; i < to->num_items; i++) {
       const dd_snap_item *to_item = dd_snap_get_item(to, i);
+      int item_type = dd_snap_item_type(to_item);
+      int item_id = dd_snap_item_id(to_item);
       int item_size = dd_snap_get_item_size(to, i);
-      const dd_snap_item *from_item = dd_snap_find_item(from, dd_snap_item_type(to_item), dd_snap_item_id(to_item));
+      const dd_snap_item *from_item = dd_snap_find_item(from, item_type, item_id);
+
+      bool include_size = item_type >= DD_MAX_NETOBJSIZES || dw->item_sizes[item_type] == 0;
 
       if (from_item) {
-        if (diff_item(dd_snap_item_data(from_item), dd_snap_item_data(to_item), delta_data + 2, item_size / 4)) {
-          *delta_data++ = dd_snap_item_type(to_item);
-          *delta_data++ = dd_snap_item_id(to_item);
-          memcpy(delta_data, dd_snap_item_data(to_item), item_size);
-          diff_item(dd_snap_item_data(from_item), dd_snap_item_data(to_item), delta_data, item_size / 4);
+        int *diff_storage = (int *)malloc(item_size);
+        if (diff_storage && diff_item(dd_snap_item_data(from_item), dd_snap_item_data(to_item), diff_storage, item_size / 4)) {
+          *delta_data++ = item_type;
+          *delta_data++ = item_id;
+          if (include_size) *delta_data++ = item_size / 4;
+          memcpy(delta_data, diff_storage, item_size);
           delta_data += item_size / 4;
           delta->num_update_items++;
         }
+        if (diff_storage) free(diff_storage);
       } else {
-        *delta_data++ = dd_snap_item_type(to_item);
-        *delta_data++ = dd_snap_item_id(to_item);
+        *delta_data++ = item_type;
+        *delta_data++ = item_id;
+        if (include_size) *delta_data++ = item_size / 4;
         memcpy(delta_data, dd_snap_item_data(to_item), item_size);
         delta_data += item_size / 4;
         delta->num_update_items++;
@@ -1274,18 +1612,16 @@ bool demo_w_write_snap(dd_demo_writer *dw, int tick, const void *data, int size)
     }
 
     int delta_size = (int)((uint8_t *)delta_data - delta_buf);
-    if (delta_size > (int)sizeof(dd_snap_delta) - (int)sizeof(int)) { // something changed
+    if (delta_size > (int)sizeof(dd_snap_delta) - (int)sizeof(int)) {
       demo_w_write_data(dw, DD_CHUNKTYPE_DELTA, delta_buf, delta_size);
-      memcpy(dw->last_snapshot_data, data, size);
     }
+    memcpy(dw->last_snapshot_data, data, size);
   }
   return true;
 }
 
 bool demo_w_write_msg(dd_demo_writer *dw, int tick, const void *data, int size) {
   if (!dw || !dw->file) return false;
-  /* In the original code, messages are written without a tickmarker,
-     they are just associated with the last written tick. */
   if (dw->last_tick_marker != tick) {
     demo_w_write_tickmarker(dw, tick, false);
   }
@@ -1403,6 +1739,7 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
     if (header_byte & DD_CHUNKTYPEFLAG_TICKMARKER) {
       chunk->is_keyframe = (header_byte & DD_CHUNKTICKFLAG_KEYFRAME) != 0;
       if (dr->info.header.version >= DD_DEMO_VERSION_TICKCOMPRESSION && (header_byte & DD_CHUNKTICKFLAG_TICK_COMPRESSED)) {
+        if (dr->current_tick == -1) dr->current_tick = 0; // Should not happen on well-formed demos
         dr->current_tick += header_byte & DD_CHUNKMASK_TICK;
       } else {
         uint8_t tick_data[4];
@@ -1461,7 +1798,7 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
 
 static void undiff_item(const int *past, const int *diff, int *out, int size) {
   while (size--) {
-    *out++ = (unsigned)*past++ + (unsigned)*diff++;
+    *out++ = (unsigned int)*past++ + (unsigned int)*diff++;
   }
 }
 
@@ -1522,42 +1859,32 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_si
   return final_size;
 }
 
-/* From protocol.cpp */
-static void dd_reader_init_netobj_sizes(dd_demo_reader *dr) {
-  dr->item_sizes[DD_NETOBJTYPE_PLAYERINPUT] = sizeof(dd_netobj_player_input);
-  dr->item_sizes[DD_NETOBJTYPE_PROJECTILE] = sizeof(dd_netobj_projectile);
-  dr->item_sizes[DD_NETOBJTYPE_LASER] = sizeof(dd_netobj_laser);
-  dr->item_sizes[DD_NETOBJTYPE_PICKUP] = sizeof(dd_netobj_pickup);
-  dr->item_sizes[DD_NETOBJTYPE_FLAG] = sizeof(dd_netobj_flag);
-  dr->item_sizes[DD_NETOBJTYPE_GAMEINFO] = sizeof(dd_netobj_game_info);
-  dr->item_sizes[DD_NETOBJTYPE_GAMEDATA] = sizeof(dd_netobj_game_data);
-  dr->item_sizes[DD_NETOBJTYPE_CHARACTERCORE] = sizeof(dd_netobj_character_core);
-  dr->item_sizes[DD_NETOBJTYPE_CHARACTER] = sizeof(dd_netobj_character);
-  dr->item_sizes[DD_NETOBJTYPE_PLAYERINFO] = sizeof(dd_netobj_player_info);
-  dr->item_sizes[DD_NETOBJTYPE_CLIENTINFO] = sizeof(dd_netobj_client_info);
-  dr->item_sizes[DD_NETOBJTYPE_SPECTATORINFO] = sizeof(dd_netobj_spectator_info);
-  dr->item_sizes[DD_NETEVENTTYPE_COMMON] = sizeof(dd_netevent_common);
-  dr->item_sizes[DD_NETEVENTTYPE_EXPLOSION] = sizeof(dd_netevent_explosion);
-  dr->item_sizes[DD_NETEVENTTYPE_SPAWN] = sizeof(dd_netevent_spawn);
-  dr->item_sizes[DD_NETEVENTTYPE_HAMMERHIT] = sizeof(dd_netevent_hammer_hit);
-  dr->item_sizes[DD_NETEVENTTYPE_DEATH] = sizeof(dd_netevent_death);
-  dr->item_sizes[DD_NETEVENTTYPE_SOUNDGLOBAL] = sizeof(dd_netevent_sound_global);
-  dr->item_sizes[DD_NETEVENTTYPE_SOUNDWORLD] = sizeof(dd_netevent_sound_world);
-  dr->item_sizes[DD_NETEVENTTYPE_DAMAGEIND] = sizeof(dd_netevent_damage_ind);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETCHARACTER] = sizeof(dd_netobj_ddnet_character);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETPLAYER] = sizeof(dd_netobj_ddnet_player);
-  dr->item_sizes[DD_NETOBJTYPE_GAMEINFOEX] = sizeof(dd_netobj_game_info_ex);
-  dr->item_sizes[DD_NETOBJTYPE_DDRACEPROJECTILE] = sizeof(dd_netobj_ddrace_projectile);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETLASER] = sizeof(dd_netobj_ddnet_laser);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETPROJECTILE] = sizeof(dd_netobj_ddnet_projectile);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETPICKUP] = sizeof(dd_netobj_ddnet_pickup);
-  dr->item_sizes[DD_NETOBJTYPE_DDNETSPECTATORINFO] = sizeof(dd_netobj_ddnet_spectator_info);
-  dr->item_sizes[DD_NETEVENTTYPE_BIRTHDAY] = sizeof(dd_netevent_birthday);
-  dr->item_sizes[DD_NETEVENTTYPE_FINISH] = sizeof(dd_netevent_finish);
-  dr->item_sizes[DD_NETOBJTYPE_SPECCHAR] = sizeof(dd_netobj_spec_char);
-  dr->item_sizes[DD_NETOBJTYPE_SWITCHSTATE] = sizeof(dd_netobj_switch_state);
-  dr->item_sizes[DD_NETOBJTYPE_ENTITYEX] = sizeof(dd_netobj_entity_ex);
-  dr->item_sizes[DD_NETEVENTTYPE_MAPSOUNDWORLD] = sizeof(dd_netevent_map_sound_world);
+static void dd_init_netobj_sizes(short *item_sizes) {
+  memset(item_sizes, 0, sizeof(short) * DD_MAX_NETOBJSIZES);
+  item_sizes[DD_NETOBJTYPE_PLAYERINPUT] = sizeof(dd_netobj_player_input);
+  item_sizes[DD_NETOBJTYPE_PROJECTILE] = sizeof(dd_netobj_projectile);
+  item_sizes[DD_NETOBJTYPE_LASER] = sizeof(dd_netobj_laser);
+  item_sizes[DD_NETOBJTYPE_PICKUP] = sizeof(dd_netobj_pickup);
+  item_sizes[DD_NETOBJTYPE_FLAG] = sizeof(dd_netobj_flag);
+  item_sizes[DD_NETOBJTYPE_GAMEINFO] = sizeof(dd_netobj_game_info);
+  item_sizes[DD_NETOBJTYPE_GAMEDATA] = sizeof(dd_netobj_game_data);
+  item_sizes[DD_NETOBJTYPE_CHARACTERCORE] = sizeof(dd_netobj_character_core);
+  item_sizes[DD_NETOBJTYPE_CHARACTER] = sizeof(dd_netobj_character);
+  item_sizes[DD_NETOBJTYPE_PLAYERINFO] = sizeof(dd_netobj_player_info);
+  item_sizes[DD_NETOBJTYPE_CLIENTINFO] = sizeof(dd_netobj_client_info);
+  item_sizes[DD_NETOBJTYPE_SPECTATORINFO] = sizeof(dd_netobj_spectator_info);
+  item_sizes[DD_NETEVENTTYPE_COMMON] = sizeof(dd_netevent_common);
+  item_sizes[DD_NETEVENTTYPE_EXPLOSION] = sizeof(dd_netevent_explosion);
+  item_sizes[DD_NETEVENTTYPE_SPAWN] = sizeof(dd_netevent_spawn);
+  item_sizes[DD_NETEVENTTYPE_HAMMERHIT] = sizeof(dd_netevent_hammer_hit);
+  item_sizes[DD_NETEVENTTYPE_DEATH] = sizeof(dd_netevent_death);
+  item_sizes[DD_NETEVENTTYPE_SOUNDGLOBAL] = sizeof(dd_netevent_sound_global);
+  item_sizes[DD_NETEVENTTYPE_SOUNDWORLD] = sizeof(dd_netevent_sound_world);
+  item_sizes[DD_NETEVENTTYPE_DAMAGEIND] = sizeof(dd_netevent_damage_ind);
 }
+
+static void dd_writer_init_netobj_sizes(dd_demo_writer *dw) { dd_init_netobj_sizes(dw->item_sizes); }
+
+static void dd_reader_init_netobj_sizes(dd_demo_reader *dr) { dd_init_netobj_sizes(dr->item_sizes); }
 
 #endif /* DDNET_DEMO_IMPLEMENTATION */

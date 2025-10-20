@@ -15,8 +15,8 @@ typedef struct {
   uint32_t state[8];
 } SHA256_CTX;
 
-#define DBL_INT_ADD(a, b, c)                                                                                                                         \
-  if (a > 0xffffffff - (c)) ++b;                                                                                                                     \
+#define DBL_INT_ADD(a, b, c)                                                                                                                                   \
+  if (a > 0xffffffff - (c)) ++b;                                                                                                                               \
   a += c;
 #define ROTLEFT(a, b) (((a) << (b)) | ((a) >> (32 - (b))))
 #define ROTRIGHT(a, b) (((a) >> (b)) | ((a) << (32 - (b))))
@@ -28,13 +28,12 @@ typedef struct {
 #define SIG0(x) (ROTRIGHT(x, 7) ^ ROTRIGHT(x, 18) ^ ((x) >> 3))
 #define SIG1(x) (ROTRIGHT(x, 17) ^ ROTRIGHT(x, 19) ^ ((x) >> 10))
 
-static const uint32_t k[64] = {0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01,
-                               0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-                               0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-                               0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-                               0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08,
-                               0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-                               0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+static const uint32_t k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74,
+    0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d,
+    0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e,
+    0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
   uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
@@ -184,6 +183,24 @@ void str_to_ints(int *pInts, int num_ints, const char *pStr) {
   }
 }
 
+void send_chat_message(dd_demo_writer *writer, int tick, int client_id, int team, const char *message) {
+  uint8_t msg_buffer[1024];
+  int *p_data = (int *)msg_buffer;
+
+  // The message payload must start with the message type ID
+  *p_data++ = DD_NETMSGTYPE_SV_CHAT;
+  *p_data++ = team;
+  *p_data++ = client_id;
+
+  // Copy the string right after the integers
+  strcpy((char *)p_data, message);
+
+  // Calculate total size: 3 ints + string length + null terminator
+  int size = (sizeof(int) * 3) + strlen(message) + 1;
+
+  demo_w_write_msg(writer, tick, msg_buffer, size);
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     printf("Usage: %s <mapfile.map>\n", argv[0]);
@@ -191,10 +208,9 @@ int main(int argc, char **argv) {
   }
 
   const char *map_filepath = argv[1];
-  const char *demo_filename = "generated_demo.demo";
+  const char *demo_filename = "generated_demo_full.demo";
   const int num_players = 4;
-  const int demo_duration_ticks = 250; // 5 seconds
-  const int projectile_fire_tick = 50;
+  const int demo_duration_ticks = 1000; // 20 seconds
 
   // Load map file
   FILE *f_map = fopen(map_filepath, "rb");
@@ -253,95 +269,121 @@ int main(int argc, char **argv) {
 
   demo_w_begin(writer, f_demo, map_name, map_crc, "Race");
   demo_w_write_map(writer, map_sha256, map_data, map_size);
+  free(map_data);
 
   dd_snapshot_builder *sb = demo_sb_create();
   uint8_t snap_buf[DD_MAX_SNAPSHOT_SIZE];
 
   for (int tick = 0; tick < demo_duration_ticks; ++tick) {
     demo_sb_clear(sb);
+    int next_item_id = num_players;
 
-    // Game World Objects
+    // chat message examples
+    if (tick == 0) {
+      // server broadcast message at the start
+      send_chat_message(writer, tick, -1, 0, "*** Welcome to the demo! ***");
+    }
+    if (tick > 0 && tick % (DD_SERVER_TICK_SPEED * 5) == 0) {
+      // player 0 says something to everyone
+      send_chat_message(writer, tick, 0, 0, "Hello everyone!");
+    }
+    if (tick > 0 && tick % (DD_SERVER_TICK_SPEED * 8) == 0) {
+      // player 2 says something to their team (team 0)
+      send_chat_message(writer, tick, 2, 1, "Team message!");
+    }
+
+    // Game Info (including extended version)
     dd_netobj_game_info *game_info = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFO, 0, sizeof(dd_netobj_game_info));
-    game_info->m_RoundStartTick = 0;
-    game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
-    game_info->m_GameFlags = 0;
+    if (game_info) {
+      game_info->m_RoundStartTick = 0;
+      game_info->m_GameStateFlags = DD_GAMESTATEFLAG_RACETIME;
+    }
 
+    // Adding an Ex object. The library now handles this automatically.
     dd_netobj_game_info_ex *game_info_ex = demo_sb_add_item(sb, DD_NETOBJTYPE_GAMEINFOEX, 0, sizeof(dd_netobj_game_info_ex));
-    game_info_ex->m_Flags = 0;
-    game_info_ex->m_Flags2 = 0;
+    if (game_info_ex) {
+      game_info_ex->m_Version = 10;
+      game_info_ex->m_Flags = DD_GAMEINFOFLAG_GAMETYPE_DDNET | DD_GAMEINFOFLAG_UNLIMITED_AMMO;
+    }
 
-    // Player-specific Objects
+    // Players
     for (int i = 0; i < num_players; ++i) {
-      int start_x = 47.5 * 32 + i * 32;
-      int start_y = 10.5 * 32;
+      int start_x = 160 * 32;
+      int start_y = 15 * 32;
 
       // ClientInfo
       dd_netobj_client_info *cinfo = demo_sb_add_item(sb, DD_NETOBJTYPE_CLIENTINFO, i, sizeof(dd_netobj_client_info));
-      char player_name[16];
-      snprintf(player_name, sizeof(player_name), "Player %d", i);
-      str_to_ints(cinfo->m_aName, 4, player_name);
-      str_to_ints(cinfo->m_aClan, 3, "Demo");
-      str_to_ints(cinfo->m_aSkin, 6, "default");
-      cinfo->m_UseCustomColor = 0;
+      if (cinfo) {
+        char player_name[16];
+        snprintf(player_name, sizeof(player_name), "Player %d", i);
+        str_to_ints(cinfo->m_aName, 4, player_name);
+        str_to_ints(cinfo->m_aClan, 3, "Demo");
+        str_to_ints(cinfo->m_aSkin, 6, "default");
+        cinfo->m_UseCustomColor = 0;
+      }
 
       // PlayerInfo
       dd_netobj_player_info *pinfo = demo_sb_add_item(sb, DD_NETOBJTYPE_PLAYERINFO, i, sizeof(dd_netobj_player_info));
-      pinfo->m_Local = (i == 0);
-      pinfo->m_ClientId = i;
-      pinfo->m_Team = 0;
-      pinfo->m_Score = tick;
+      if (pinfo) {
+        pinfo->m_Local = (i == 0);
+        pinfo->m_ClientId = i;
+        pinfo->m_Team = 0;
+        pinfo->m_Score = tick;
+        pinfo->m_Latency = -1;
+      }
 
-      // DDNetPlayer
+      // DDNetPlayer (Ex object)
       dd_netobj_ddnet_player *ddpinfo = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPLAYER, i, sizeof(dd_netobj_ddnet_player));
-      ddpinfo->m_Flags = 0;
-      ddpinfo->m_AuthLevel = 0;
+      if (ddpinfo) {
+        ddpinfo->m_Flags = 0;
+        ddpinfo->m_AuthLevel = 0;
+      }
 
       // Character
       dd_netobj_character *character = demo_sb_add_item(sb, DD_NETOBJTYPE_CHARACTER, i, sizeof(dd_netobj_character));
+      float angle = (tick / 50.0f) + ((float)i / num_players) * (2.0f * 3.14159265f);
+      character->core.m_X = start_x + (int)(cosf(angle) * 150.0f);
+      character->core.m_Y = start_y + (int)(sinf(angle) * 150.0f);
       character->core.m_Tick = tick;
-      float angle = (float)tick / DD_SERVER_TICK_SPEED + (i * 1.57f);
-      character->core.m_X = (int)(start_x + cos(angle) * 5 * 32);
-      character->core.m_Y = (int)(start_y + sin(angle) * 5 * 32);
-      character->core.m_VelX = 0;
-      character->core.m_VelY = 0;
-      character->core.m_Angle = (int)(angle * 256.0f);
       character->m_Health = 10;
-      character->m_Armor = 0;
-      character->m_Weapon = DD_WEAPON_HAMMER;
+      character->m_Weapon = DD_WEAPON_GUN;
 
-      // DDNetCharacter
-      dd_netobj_ddnet_character *ddchar = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETCHARACTER, i, sizeof(dd_netobj_ddnet_character));
-      memset(ddchar, 0, sizeof(dd_netobj_ddnet_character));
-
-      if (tick % 50 == 0) {
-        dd_netevent_spawn *spawn_event = demo_sb_add_item(sb, DD_NETEVENTTYPE_SPAWN, i, sizeof(dd_netevent_spawn));
-        spawn_event->common.m_X = character->core.m_X;
-        spawn_event->common.m_Y = character->core.m_Y;
-
-        dd_netevent_sound_world *sound_event = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, i + num_players, sizeof(dd_netevent_sound_world));
-        sound_event->common.m_X = character->core.m_X;
-        sound_event->common.m_Y = character->core.m_Y;
-        sound_event->m_SoundId = DD_SOUND_PLAYER_SPAWN;
-      }
-    }
-
-    for (int y = 50; y < 100; ++y)
-      for (int x = 50; x < 100; ++x) {
-        dd_netobj_ddnet_projectile *proj =
-            demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, (y - 50) * 50 + (x - 50), sizeof(dd_netobj_ddnet_projectile));
-        if (proj) {
-          proj->m_Flags = DD_PROJECTILEFLAG_EXPLOSIVE | DD_PROJECTILEFLAG_NORMALIZE_VEL;
-          proj->m_StartTick = 0;
-          proj->m_Owner = 0;
-          proj->m_Type = DD_WEAPON_GRENADE;
-          proj->m_X = x * 32 * 100;
-          proj->m_Y = y * 32 * 100;
-          proj->m_VelX = 1e6;
-          proj->m_VelY = 0;
-          proj->m_TuneZone = 0;
-          proj->m_SwitchNumber = 0;
+      // Add a laser from each player every 50 ticks (Ex object)
+      if (true) {
+        dd_netobj_ddnet_laser *laser = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, next_item_id++, sizeof(dd_netobj_ddnet_laser));
+        if (laser) {
+          laser->m_FromX = character->core.m_X;
+          laser->m_FromY = character->core.m_Y;
+          laser->m_ToX = start_x; // Target the center
+          laser->m_ToY = start_y;
+          laser->m_StartTick = tick;
+          laser->m_Owner = i;
+          laser->m_Type = DD_LASERTYPE_RIFLE;
         }
       }
+
+      // Add a projectile every 10 ticks (Ex object)
+      for (int p = 0; p < 5; ++p) {
+        dd_netobj_ddnet_projectile *proj = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, next_item_id++, sizeof(dd_netobj_ddnet_projectile));
+        if (proj) {
+          float angle = (tick / 50.0f) + ((float)p / 5.f) * (2.0f * 3.14159265f);
+          proj->m_X = character->core.m_X + (int)(cosf(angle) * 32.0f);
+          proj->m_Y = character->core.m_Y + (int)(sinf(angle) * 32.0f);
+          proj->m_X *= 100.f;
+          proj->m_Y *= 100.f;
+          proj->m_VelX = 0; //(int)(cosf(proj_angle) * 1000.0f);
+          proj->m_VelY = 0; //(int)(sinf(proj_angle) * 1000.0f);
+          proj->m_Type = DD_WEAPON_GRENADE;
+          proj->m_StartTick = tick - 1;
+          proj->m_Owner = i;
+          proj->m_Flags = DD_PROJECTILEFLAG_EXPLOSIVE;
+          proj->m_SwitchNumber = 0;
+          proj->m_TuneZone = 0;
+        }
+      }
+    }
+    if (tick % 100 == 0) {
+    }
 
     int snap_size = demo_sb_finish(sb, snap_buf);
     if (snap_size > 0) {
@@ -349,16 +391,15 @@ int main(int argc, char **argv) {
     }
   }
 
-  printf("Wrote %d ticks of simulation for %d players.\n", demo_duration_ticks, num_players);
+  printf("Wrote %d ticks of simulation.\n", demo_duration_ticks);
 
   demo_w_finish(writer);
   printf("Demo file finalized.\n");
 
-  free(map_data);
   demo_w_destroy(&writer);
   demo_sb_destroy(&sb);
 
-  printf("\nSuccessfully created '%s'. You can now play this file in a DDNet client.\n", demo_filename);
+  printf("\nSuccessfully created '%s'.\n", demo_filename);
 
   return 0;
 }
