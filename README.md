@@ -1,3 +1,2 @@
 # Single header DDNet (0.6) Demo reading/writing library (WIP)
-don't use or read right now. Not everything is working.
-There is no guarantee on anything right now i gotta test this some more.
+everything except net messages works. if you can figure out why net messages are not working, i would appreciate a pr.
