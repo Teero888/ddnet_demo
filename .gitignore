@@ -1,3 +1,5 @@
 *.demo
 *.out
 *.xml
+.history
+build/

@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DDNET_DEMO_IMPLEMENTATION
 #include "ddnet_demo.h"
 
 // SHA-256 Implementation
@@ -339,21 +338,24 @@ int main(int argc, char **argv) {
       character->m_Health = 10;
       character->m_Weapon = DD_WEAPON_GUN;
 
+      dd_netevent_sound_world *sound = demo_sb_add_item(sb, DD_NETEVENTTYPE_SOUNDWORLD, next_item_id++, sizeof(dd_netevent_sound_world));
+      sound->common.m_X = character->core.m_X;
+      sound->common.m_Y = character->core.m_Y;
+      sound->m_SoundId = 0;
+
       // Add a laser from each player every 50 ticks (Ex object)
-      if (true) {
-        dd_netobj_ddnet_laser *laser = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, next_item_id++, sizeof(dd_netobj_ddnet_laser));
-        if (laser) {
-          laser->m_FromX = character->core.m_X;
-          laser->m_FromY = character->core.m_Y;
-          laser->m_ToX = start_x; // Target the center
-          laser->m_ToY = start_y;
-          laser->m_StartTick = tick;
-          laser->m_Owner = i;
-          laser->m_Type = DD_LASERTYPE_RIFLE;
-        }
+      dd_netobj_ddnet_laser *laser = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETLASER, next_item_id++, sizeof(dd_netobj_ddnet_laser));
+      if (laser) {
+        laser->m_FromX = character->core.m_X;
+        laser->m_FromY = character->core.m_Y;
+        laser->m_ToX = start_x; // Target the center
+        laser->m_ToY = start_y;
+        laser->m_StartTick = tick;
+        laser->m_Owner = i;
+        laser->m_Type = DD_LASERTYPE_RIFLE;
       }
 
-      // Add a projectile every 10 ticks (Ex object)
+      // Add some projectiles
       for (int p = 0; p < 5; ++p) {
         dd_netobj_ddnet_projectile *proj = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPROJECTILE, next_item_id++, sizeof(dd_netobj_ddnet_projectile));
         if (proj) {
@@ -373,6 +375,7 @@ int main(int argc, char **argv) {
         }
       }
 
+      // Add some pickups
       for (int p = 0; p < 5; ++p) {
         dd_netobj_ddnet_pickup *pick = demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETPICKUP, next_item_id++, sizeof(dd_netobj_ddnet_pickup));
         if (pick) {
