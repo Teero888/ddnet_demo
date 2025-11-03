@@ -970,8 +970,10 @@ static void dd_uint_to_be(uint8_t *data, uint32_t val) {
 
 #if defined(_WIN32) || defined(_WIN64)
 #define dd_fseek _fseeki64
+#define dd_ftell _ftelli64
 #else
 #define dd_fseek fseeko
+#define dd_ftell ftello
 #endif
 
 /* string utilities */
@@ -1785,13 +1787,16 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f) {
     }
   }
 
+  int64_t pos_after_header = dd_ftell(f);
+  if (pos_after_header == -1L) return false;
+
   uint8_t uuid[16];
   size_t read_bytes = fread(uuid, 1, sizeof(uuid), f);
   if (read_bytes == sizeof(uuid) && memcmp(uuid, DD_SHA256_EXTENSION, sizeof(uuid)) == 0) {
     dr->info.has_sha256 = fread(dr->info.map_sha256, 32, 1, f) == 1;
   } else {
     dr->info.has_sha256 = false;
-    dd_fseek(f, -(int64_t)read_bytes, SEEK_CUR);
+    dd_fseek(f, pos_after_header, SEEK_SET);
   }
 
   dd_fseek(f, dr->info.map_size, SEEK_CUR);
