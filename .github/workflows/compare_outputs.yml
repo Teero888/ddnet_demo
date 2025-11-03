@@ -42,8 +42,8 @@ jobs:
           pwd
           echo "workspace dir is: ${{ github.workspace }}"
           ls -l "${{ github.workspace }}"
-
           echo "Running example_write..."
+          ls -l .
           ./example_write${{ env.EXEC_SUFFIX }} "${{ github.workspace }}/Aip-Gores.map"
 
       - name: Run example_read and filter output
