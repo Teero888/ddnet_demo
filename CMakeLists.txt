@@ -8,7 +8,6 @@ option(EXAMPLES "Build the example executables" ON)
 
 if(EXAMPLES)
     add_executable(example_write example_write.c)
-    target_link_libraries(example_write PRIVATE m)
 
     add_executable(example_read example_read.c)
     if(UNIX)
