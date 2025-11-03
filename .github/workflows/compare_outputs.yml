@@ -41,10 +41,10 @@ jobs:
           
           pwd
           echo "workspace dir is: ${{ github.workspace }}"
-          ls -l ${{ github.workspace }}
+          ls -l "${{ github.workspace }}"
 
           echo "Running example_write..."
-          ./example_write${{ env.EXEC_SUFFIX }} ${{ github.workspace }}/Aip-Gores.map
+          ./example_write${{ env.EXEC_SUFFIX }} "${{ github.workspace }}/Aip-Gores.map"
 
       - name: Run example_read and filter output
         shell: bash
@@ -53,7 +53,7 @@ jobs:
           cd ${{ env.BUILD_DIR }}
 
           echo "Running example_read..."
-          ./example_read${{ env.EXEC_SUFFIX }} generated.demo | grep -v "Timestamp:" > ${{ github.workspace }}/output.txt
+          ./example_read${{ env.EXEC_SUFFIX }} generated.demo | grep -v "Timestamp:" > "${{ github.workspace }}/output.txt"
           
           echo "--- Captured Output ---"
           cat ${{ github.workspace }}/output.txt
