@@ -858,7 +858,7 @@ typedef struct dd_demo_reader dd_demo_reader;
 typedef struct dd_snapshot_builder dd_snapshot_builder;
 
 /* Demo Writer API */
-dd_demo_writer *demo_w_create();
+dd_demo_writer *demo_w_create(void);
 void demo_w_destroy(dd_demo_writer **dw_ptr);
 bool demo_w_begin(dd_demo_writer *dw, FILE *f, const char *map_name, uint32_t map_crc, const char *type);
 bool demo_w_write_map(dd_demo_writer *dw, const uint8_t map_sha256[32], const uint8_t *map_data, uint32_t map_size);
@@ -868,7 +868,7 @@ void demo_w_add_marker(dd_demo_writer *dw, int tick);
 bool demo_w_finish(dd_demo_writer *dw);
 
 /* Demo Reader API */
-dd_demo_reader *demo_r_create();
+dd_demo_reader *demo_r_create(void);
 void demo_r_destroy(dd_demo_reader **dr_ptr);
 bool demo_r_open(dd_demo_reader *dr, FILE *f);
 const dd_demo_info *demo_r_get_info(const dd_demo_reader *dr);
@@ -876,7 +876,7 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk);
 int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_size, void *unpacked_snap);
 
 /* Snapshot Builder API */
-dd_snapshot_builder *demo_sb_create();
+dd_snapshot_builder *demo_sb_create(void);
 void demo_sb_destroy(dd_snapshot_builder **sb_ptr);
 void demo_sb_clear(dd_snapshot_builder *sb);
 void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size);
@@ -1385,7 +1385,7 @@ static int demo_sb_get_extended_item_type_index(dd_snapshot_builder *sb, int typ
   return index;
 }
 
-dd_snapshot_builder *demo_sb_create() {
+dd_snapshot_builder *demo_sb_create(void) {
   dd_snapshot_builder *sb = (dd_snapshot_builder *)malloc(sizeof(dd_snapshot_builder));
   if (sb) demo_sb_clear(sb);
   return sb;
@@ -1491,7 +1491,7 @@ struct dd_demo_writer {
 
 static void dd_writer_init_netobj_sizes(dd_demo_writer *dw);
 
-dd_demo_writer *demo_w_create() {
+dd_demo_writer *demo_w_create(void) {
   dd_demo_writer *dw = (dd_demo_writer *)calloc(1, sizeof(dd_demo_writer));
   if (!dw) return NULL;
   dd_huffman_init(&dw->huffman);
@@ -1750,7 +1750,7 @@ struct dd_demo_reader {
 
 static void dd_reader_init_netobj_sizes(dd_demo_reader *dr);
 
-dd_demo_reader *demo_r_create() {
+dd_demo_reader *demo_r_create(void) {
   dd_demo_reader *dr = (dd_demo_reader *)calloc(1, sizeof(dd_demo_reader));
   if (!dr) return NULL;
   dd_huffman_init(&dr->huffman);
@@ -1884,7 +1884,7 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_si
   const int *deleted_items = delta->data;
   const int *updated_items = deleted_items + delta->num_deleted_items;
 
-  // 1. Copy non-deleted and non-updated items from `from` snapshot
+  // Copy non-deleted and non-updated items from `from` snapshot
   for (int i = 0; i < from->num_items; i++) {
     const dd_snap_item *from_item = dd_snap_get_item(from, i);
     bool is_deleted = false;
