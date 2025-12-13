@@ -1,7 +1,7 @@
 /**
  * @file ddnet_demo.h
  * @brief A single-header C99 library for reading, writing, and creating DDNet 0.6 demo files.
- * @version 1.1
+ * @version 1.1.1
  *
  * To use this library, do this in one C file:
  * #define DDNET_DEMO_IMPLEMENTATION
@@ -29,12 +29,15 @@ extern "C" {
 
 #define DD_SERVER_TICK_SPEED 50
 #define DD_MAX_TIMELINE_MARKERS 64
-#define DD_MAX_SNAPSHOT_ITEMS 1024
-#define DD_MAX_SNAPSHOT_SIZE (DD_MAX_SNAPSHOT_ITEMS * 256) // Increased size for safety
 #define DD_MAX_NETOBJSIZES 64
-#define DD_MAX_PAYLOAD (DD_MAX_SNAPSHOT_SIZE + 4096)
-#define DD_MAX_TYPE 0x7fff
+#define	DD_NET_MAX_PACKETSIZE 1400
+#define	DD_NET_MAX_PAYLOAD (DD_NET_MAX_PACKETSIZE - 6)
 #define DD_MAX_MESSAGE_SIZE 1024
+
+#define DD_SNAPSHOT_MAX_TYPE 0x7fff
+#define DD_SNAPSHOT_MAX_ITEMS 65536
+#define DD_SNAPSHOT_MAX_PARTS 64
+#define DD_SNAPSHOT_MAX_SIZE (DD_SNAPSHOT_MAX_PARTS * 1024)
 
 /* Demo chunk types that can be returned by the reader */
 enum {
@@ -903,7 +906,7 @@ int demo_msg_finish(dd_msg_packer *packer);
 
 #endif /* DDNET_DEMO_H */
 
-// #define DDNET_DEMO_IMPLEMENTATION
+#define DDNET_DEMO_IMPLEMENTATION
 #ifdef DDNET_DEMO_IMPLEMENTATION
 #undef DDNET_DEMO_IMPLEMENTATION
 
@@ -1327,14 +1330,14 @@ static long dd_variable_int_decompress(const void *src, int src_size, void *dst,
 }
 
 static int dd_data_compress(dd_huffman_state *huff, const void *data, int size, void *output, int output_size) {
-  uint8_t intpack_buf[DD_MAX_PAYLOAD];
+  uint8_t intpack_buf[DD_SNAPSHOT_MAX_SIZE];
   int intpack_size = dd_variable_int_compress(data, size, intpack_buf, sizeof(intpack_buf));
   if (intpack_size < 0) return -1;
   return dd_huffman_compress(huff, intpack_buf, intpack_size, output, output_size);
 }
 
 static int dd_data_decompress(dd_huffman_state *huff, const void *data, int size, void *output, int output_size) {
-  uint8_t intpack_buf[DD_MAX_PAYLOAD];
+  uint8_t intpack_buf[DD_SNAPSHOT_MAX_SIZE];
   int intpack_size = dd_huffman_decompress(huff, data, size, intpack_buf, sizeof(intpack_buf));
   if (intpack_size < 0) return -1;
   return dd_variable_int_decompress(intpack_buf, intpack_size, output, output_size);
@@ -1362,9 +1365,9 @@ const dd_snap_item *dd_snap_find_item(const dd_snapshot *snap, int type, int id)
 }
 
 struct dd_snapshot_builder {
-  uint8_t data[DD_MAX_SNAPSHOT_SIZE];
+  uint8_t data[DD_SNAPSHOT_MAX_SIZE];
   int data_size;
-  int offsets[DD_MAX_SNAPSHOT_ITEMS];
+  int offsets[DD_SNAPSHOT_MAX_ITEMS];
   int num_items;
 
   int extended_item_types[MAX_EXTENDED_ITEM_TYPES];
@@ -1405,7 +1408,7 @@ void demo_sb_clear(dd_snapshot_builder *sb) {
 }
 
 void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
-  if (sb->num_items >= DD_MAX_SNAPSHOT_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + size > DD_MAX_SNAPSHOT_SIZE) {
+  if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + size > DD_SNAPSHOT_MAX_SIZE) {
     return NULL;
   }
 
@@ -1419,12 +1422,12 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
     }
 
     if (is_new) {
-      if (sb->num_items >= DD_MAX_SNAPSHOT_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + 16 > DD_MAX_SNAPSHOT_SIZE) {
+      if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + 16 > DD_SNAPSHOT_MAX_SIZE) {
         sb->num_extended_item_types--;
         return NULL;
       }
 
-      int internal_id = DD_MAX_TYPE - extended_index;
+      int internal_id = DD_SNAPSHOT_MAX_TYPE - extended_index;
       dd_snap_item *ex_item = (dd_snap_item *)(sb->data + sb->data_size);
       ex_item->type_and_id = (DD_NETOBJTYPE_EX << 16) | internal_id;
       sb->offsets[sb->num_items] = sb->data_size;
@@ -1443,7 +1446,7 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
       }
     }
 
-    final_type = DD_MAX_TYPE - extended_index;
+    final_type = DD_SNAPSHOT_MAX_TYPE - extended_index;
   }
 
   dd_snap_item *obj = (dd_snap_item *)(sb->data + sb->data_size);
@@ -1463,7 +1466,7 @@ int demo_sb_finish(dd_snapshot_builder *sb, void *snap_data) {
   snap->num_items = sb->num_items;
 
   size_t total_size = sizeof(dd_snapshot) + sizeof(int) * sb->num_items + sb->data_size;
-  if (total_size > DD_MAX_SNAPSHOT_SIZE) return -1;
+  if (total_size > DD_SNAPSHOT_MAX_SIZE) return -1;
 
   memcpy(dd_snap_offsets(snap), sb->offsets, sizeof(int) * sb->num_items);
   memcpy(dd_snap_data_start(snap), sb->data, sb->data_size);
@@ -1482,7 +1485,7 @@ struct dd_demo_writer {
   int last_tick_marker;
   int first_tick;
   int last_keyframe;
-  uint8_t last_snapshot_data[DD_MAX_SNAPSHOT_SIZE];
+  uint8_t last_snapshot_data[DD_SNAPSHOT_MAX_SIZE];
   int timeline_markers[DD_MAX_TIMELINE_MARKERS];
   int num_timeline_markers;
   dd_huffman_state huffman;
@@ -1573,7 +1576,7 @@ static void demo_w_write_chunk_header(dd_demo_writer *dw, int type, int size) {
 }
 
 static void demo_w_write_data(dd_demo_writer *dw, int type, const void *data, int size) {
-  uint8_t compressed_buf[DD_MAX_PAYLOAD];
+  uint8_t compressed_buf[DD_SNAPSHOT_MAX_SIZE];
   uint8_t *padded_data = NULL;
   int compressed_size = -1;
   int padded_size = size;
@@ -1638,7 +1641,7 @@ bool demo_w_write_snap(dd_demo_writer *dw, int tick, const void *data, int size)
 
     dd_snapshot *from = (dd_snapshot *)dw->last_snapshot_data;
     dd_snapshot *to = (dd_snapshot *)data;
-    uint8_t delta_buf[DD_MAX_SNAPSHOT_SIZE];
+    uint8_t delta_buf[DD_SNAPSHOT_MAX_SIZE];
     dd_snap_delta *delta = (dd_snap_delta *)delta_buf;
     int *delta_data = delta->data;
 
@@ -1742,8 +1745,8 @@ struct dd_demo_reader {
   FILE *file;
   dd_demo_info info;
   int current_tick;
-  uint8_t chunk_data[DD_MAX_PAYLOAD];
-  uint8_t last_snapshot_data[DD_MAX_SNAPSHOT_SIZE];
+  uint8_t chunk_data[DD_SNAPSHOT_MAX_SIZE];
+  uint8_t last_snapshot_data[DD_SNAPSHOT_MAX_SIZE];
   dd_huffman_state huffman;
   short item_sizes[DD_MAX_NETOBJSIZES];
 };
@@ -1840,7 +1843,7 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
       size = (size_bytes[1] << 8) | size_bytes[0];
     }
 
-    uint8_t compressed_data[DD_MAX_PAYLOAD];
+    uint8_t compressed_data[DD_SNAPSHOT_MAX_SIZE];
     if ((int)fread(compressed_data, 1, size, dr->file) != size) return false;
 
     int decompressed_size = dd_data_decompress(&dr->huffman, compressed_data, size, dr->chunk_data, sizeof(dr->chunk_data));
