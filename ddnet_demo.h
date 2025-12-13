@@ -30,8 +30,8 @@ extern "C" {
 #define DD_SERVER_TICK_SPEED 50
 #define DD_MAX_TIMELINE_MARKERS 64
 #define DD_MAX_NETOBJSIZES 64
-#define	DD_NET_MAX_PACKETSIZE 1400
-#define	DD_NET_MAX_PAYLOAD (DD_NET_MAX_PACKETSIZE - 6)
+#define DD_NET_MAX_PACKETSIZE 1400
+#define DD_NET_MAX_PAYLOAD (DD_NET_MAX_PACKETSIZE - 6)
 #define DD_MAX_MESSAGE_SIZE 1024
 
 #define DD_SNAPSHOT_MAX_TYPE 0x7fff
@@ -1119,7 +1119,14 @@ typedef struct {
 } dd_huffman_construct_node;
 
 static int dd_huffman_compare_nodes(const void *a, const void *b) {
-  return (*(const dd_huffman_construct_node **)b)->frequency - (*(const dd_huffman_construct_node **)a)->frequency;
+  const dd_huffman_construct_node *node_a = *(const dd_huffman_construct_node **)a;
+  const dd_huffman_construct_node *node_b = *(const dd_huffman_construct_node **)b;
+
+  int diff = node_b->frequency - node_a->frequency; // Descending frequency
+  if (diff == 0) {
+    return node_a->node_id - node_b->node_id; // Ascending ID (Stable sort emulation)
+  }
+  return diff;
 }
 
 static void dd_huffman_setbits_r(dd_huffman_node *nodes, dd_huffman_node *node, int bits, unsigned depth) {
@@ -1941,8 +1948,8 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_si
     const dd_snap_item *from_item = dd_snap_find_item(from, type, id);
     void *new_data = demo_sb_add_item(sb, type, id, item_size);
     if (!new_data) {
-        p += item_size / 4;
-        continue;
+      p += item_size / 4;
+      continue;
     }
 
     if (from_item) {
