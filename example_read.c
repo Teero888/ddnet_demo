@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     printf("Num timeline markers: %d\n", info->num_markers);
 
     dd_demo_chunk chunk;
-    uint8_t unpacked_snap[DD_MAX_SNAPSHOT_SIZE];
+    uint8_t unpacked_snap[DD_SNAPSHOT_MAX_SIZE];
 
     while (demo_r_next_chunk(dr, &chunk)) {
         switch (chunk.type) {

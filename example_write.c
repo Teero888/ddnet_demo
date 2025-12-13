@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
   free(map_data);
 
   dd_snapshot_builder *sb = demo_sb_create();
-  uint8_t snap_buf[DD_MAX_SNAPSHOT_SIZE];
+  uint8_t snap_buf[DD_SNAPSHOT_MAX_SIZE];
 
   for (int tick = 0; tick < demo_duration_ticks; ++tick) {
     demo_sb_clear(sb);
