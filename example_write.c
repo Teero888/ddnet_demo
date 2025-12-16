@@ -183,29 +183,6 @@ void str_to_ints(int *pInts, int num_ints, const char *pStr) {
   }
 }
 
-void send_chat_message(dd_demo_writer *writer, int tick, int client_id, int team, const char *message) {
-  // Use a uint8_t buffer, as the packer now operates on bytes.
-  uint8_t msg_buffer[DD_MAX_MESSAGE_SIZE];
-
-  // init the message packer
-  dd_msg_packer packer;
-  demo_msg_init(&packer, msg_buffer, sizeof(msg_buffer));
-
-  // pack the message Id and its data
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_CHAT);
-  demo_msg_add_int(&packer, team);
-  demo_msg_add_int(&packer, client_id);
-  demo_msg_add_string(&packer, message);
-
-  // finish packing to get the final size
-  int size = demo_msg_finish(&packer);
-  if (size > 0) {
-    // This will now pass the correctly packed data to the correct
-    // two-stage compression pipeline.
-    demo_w_write_msg(writer, tick, msg_buffer, size);
-  }
-}
-
 int main(int argc, char **argv) {
   if (argc != 2) {
     printf("Usage: %s <mapfile.map>\n", argv[0]);
@@ -395,7 +372,7 @@ int main(int argc, char **argv) {
     if (snap_size > 0) {
       demo_w_write_snap(writer, tick, snap_buf, snap_size);
     }
-    send_chat_message(writer, tick, 0, 0, "HELLO WORLD");
+    demo_w_write_msg_sv_chat(writer, tick, -2, 0, "HELLO WORLD");
   }
 
   printf("Wrote %d ticks of simulation.\n", demo_duration_ticks);
