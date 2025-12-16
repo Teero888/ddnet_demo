@@ -33,6 +33,15 @@ jobs:
       - name: Build
         run: cmake --build build --config Debug
 
+      - name: Run Unit Tests
+        shell: bash
+        run: |
+          echo "Moving into build directory: ${{ env.BUILD_DIR }}"
+          cd ${{ env.BUILD_DIR }}
+          
+          echo "Running test_ddnet_demo..."
+          ./test_ddnet_demo${{ env.EXEC_SUFFIX }}
+
       - name: Run example_write
         shell: bash
         run: |
