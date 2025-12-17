@@ -379,6 +379,17 @@ enum {
   DD_NUM_EMOTES
 };
 
+/* Chat NetMessage Teams */
+enum {
+  DD_TEAM_ALL = -2,
+  DD_TEAM_SPECTATORS,
+  DD_TEAM_RED,
+  DD_TEAM_BLUE,
+  DD_TEAM_WHISPER_SEND,
+  DD_TEAM_WHISPER_RECV,
+  DD_NUM_TEAMS
+};
+
 /******************************************************************************
  *
  * BITMASK FLAGS
@@ -901,16 +912,11 @@ void demo_msg_add_string(dd_msg_packer *packer, const char *str);
 int demo_msg_finish(dd_msg_packer *packer);
 
 /* sv message helpers */
-bool demo_w_write_msg_sv_motd(dd_demo_writer *dw, int tick, const char *message);
 bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, int tick, const char *message);
 bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int tick, int team, int client_id, const char *message);
 bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int tick, int killer, int victim, int weapon, int mode_special);
 bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int tick, int sound_id);
-bool demo_w_write_msg_sv_weaponpickup(dd_demo_writer *dw, int tick, int weapon);
 bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, int emoticon);
-bool demo_w_write_msg_sv_vote_option_list_add(dd_demo_writer *dw, int tick, int num_options, const char *descriptions[15]);
-bool demo_w_write_msg_sv_vote_option_add(dd_demo_writer *dw, int tick, const char *description);
-bool demo_w_write_msg_sv_vote_option_remove(dd_demo_writer *dw, int tick, const char *description);
 bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int tick, int timeout, const char *description, const char *reason);
 bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int tick, int yes, int no, int pass, int total);
 bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int tick, int time, int check, int finish);
@@ -2019,16 +2025,6 @@ static void dd_reader_init_netobj_sizes(dd_demo_reader *dr) { dd_init_netobj_siz
  * SERVER MESSAGES
  * ****************************** */
 
-bool demo_w_write_msg_sv_motd(dd_demo_writer *dw, int tick, const char *message) {
-  char buffer[DD_MAX_MESSAGE_SIZE];
-  dd_msg_packer packer;
-  demo_msg_init(&packer, buffer, sizeof(buffer));
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_MOTD << 1);
-  demo_msg_add_string(&packer, message);
-  int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
-}
-
 bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, int tick, const char *message) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
@@ -2074,16 +2070,6 @@ bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int tick, int sound_id
   return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
 }
 
-bool demo_w_write_msg_sv_weaponpickup(dd_demo_writer *dw, int tick, int weapon) {
-  char buffer[DD_MAX_MESSAGE_SIZE];
-  dd_msg_packer packer;
-  demo_msg_init(&packer, buffer, sizeof(buffer));
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_WEAPONPICKUP << 1);
-  demo_msg_add_int(&packer, weapon);
-  int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
-}
-
 bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, int emoticon) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
@@ -2091,29 +2077,6 @@ bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, i
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_EMOTICON << 1);
   demo_msg_add_int(&packer, client_id);
   demo_msg_add_int(&packer, emoticon);
-  int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
-}
-
-bool demo_w_write_msg_sv_vote_option_list_add(dd_demo_writer *dw, int tick, int num_options, const char *descriptions[15]) {
-  char buffer[DD_MAX_MESSAGE_SIZE];
-  dd_msg_packer packer;
-  demo_msg_init(&packer, buffer, sizeof(buffer));
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_VOTEOPTIONLISTADD << 1);
-  demo_msg_add_int(&packer, num_options);
-  for (int i = 0; i < 15; i++) {
-    demo_msg_add_string(&packer, descriptions[i] ? descriptions[i] : "");
-  }
-  int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
-}
-
-bool demo_w_write_msg_sv_vote_option_add(dd_demo_writer *dw, int tick, const char *description) {
-  char buffer[DD_MAX_MESSAGE_SIZE];
-  dd_msg_packer packer;
-  demo_msg_init(&packer, buffer, sizeof(buffer));
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_VOTEOPTIONADD << 1);
-  demo_msg_add_string(&packer, description);
   int size = demo_msg_finish(&packer);
   return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
 }
