@@ -877,7 +877,7 @@ void demo_w_destroy(dd_demo_writer **dw_ptr);
 bool demo_w_begin(dd_demo_writer *dw, FILE *f, const char *map_name, uint32_t map_crc, const char *type);
 bool demo_w_write_map(dd_demo_writer *dw, const uint8_t map_sha256[32], const uint8_t *map_data, uint32_t map_size);
 bool demo_w_write_snap(dd_demo_writer *dw, int tick, const void *data, int size);
-bool demo_w_write_msg(dd_demo_writer *dw, int tick, const void *data, int size);
+bool demo_w_write_msg(dd_demo_writer *dw, const void *data, int size);
 void demo_w_add_marker(dd_demo_writer *dw, int tick);
 bool demo_w_finish(dd_demo_writer *dw);
 
@@ -887,7 +887,7 @@ void demo_r_destroy(dd_demo_reader **dr_ptr);
 bool demo_r_open(dd_demo_reader *dr, FILE *f);
 const dd_demo_info *demo_r_get_info(const dd_demo_reader *dr);
 bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk);
-int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_size, void *unpacked_snap);
+int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpacked_snap);
 
 /* Snapshot Builder API */
 dd_snapshot_builder *demo_sb_create(void);
@@ -912,15 +912,15 @@ void demo_msg_add_string(dd_msg_packer *packer, const char *str);
 int demo_msg_finish(dd_msg_packer *packer);
 
 /* sv message helpers */
-bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, int tick, const char *message);
-bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int tick, int team, int client_id, const char *message);
-bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int tick, int killer, int victim, int weapon, int mode_special);
-bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int tick, int sound_id);
-bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, int emoticon);
-bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int tick, int timeout, const char *description, const char *reason);
-bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int tick, int yes, int no, int pass, int total);
-bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int tick, int time, int check, int finish);
-bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int tick, int server_time_best, int player_time_best);
+bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, const char *message);
+bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int team, int client_id, const char *message);
+bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int killer, int victim, int weapon, int mode_special);
+bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int sound_id);
+bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int client_id, int emoticon);
+bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int timeout, const char *description, const char *reason);
+bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int yes, int no, int pass, int total);
+bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int time, int check, int finish);
+bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int server_time_best, int player_time_best);
 
 #ifdef __cplusplus
 }
@@ -928,7 +928,7 @@ bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int tick, int server_
 
 #endif /* DDNET_DEMO_H */
 
-// #define DDNET_DEMO_IMPLEMENTATION
+#define DDNET_DEMO_IMPLEMENTATION
 #ifdef DDNET_DEMO_IMPLEMENTATION
 #undef DDNET_DEMO_IMPLEMENTATION
 
@@ -1726,7 +1726,7 @@ bool demo_w_write_snap(dd_demo_writer *dw, int tick, const void *data, int size)
   return true;
 }
 
-bool demo_w_write_msg(dd_demo_writer *dw, int tick, const void *data, int size) {
+bool demo_w_write_msg(dd_demo_writer *dw, const void *data, int size) {
   if (!dw || !dw->file) {
     return false;
   }
@@ -1909,7 +1909,7 @@ static void undiff_item(const int *past, const int *diff, int *out, int size) {
   }
 }
 
-int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, int delta_size, void *unpacked_snap_data) {
+int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpacked_snap_data) {
   dd_snap_delta *delta = (dd_snap_delta *)delta_data;
   dd_snapshot *from = (dd_snapshot *)dr->last_snapshot_data;
   dd_snapshot_builder *sb = demo_sb_create();
@@ -2025,17 +2025,17 @@ static void dd_reader_init_netobj_sizes(dd_demo_reader *dr) { dd_init_netobj_siz
  * SERVER MESSAGES
  * ****************************** */
 
-bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, int tick, const char *message) {
+bool demo_w_write_msg_sv_broadcast(dd_demo_writer *dw, const char *message) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_BROADCAST << 1);
   demo_msg_add_string(&packer, message);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int tick, int team, int client_id, const char *message) {
+bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int team, int client_id, const char *message) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2044,10 +2044,10 @@ bool demo_w_write_msg_sv_chat(dd_demo_writer *dw, int tick, int team, int client
   demo_msg_add_int(&packer, client_id);
   demo_msg_add_string(&packer, message);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int tick, int killer, int victim, int weapon, int mode_special) {
+bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int killer, int victim, int weapon, int mode_special) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2057,20 +2057,20 @@ bool demo_w_write_msg_sv_killmsg(dd_demo_writer *dw, int tick, int killer, int v
   demo_msg_add_int(&packer, weapon);
   demo_msg_add_int(&packer, mode_special);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int tick, int sound_id) {
+bool demo_w_write_msg_sv_sound_global(dd_demo_writer *dw, int sound_id) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_SOUNDGLOBAL << 1);
   demo_msg_add_int(&packer, sound_id);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, int emoticon) {
+bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int client_id, int emoticon) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2078,20 +2078,20 @@ bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int tick, int client_id, i
   demo_msg_add_int(&packer, client_id);
   demo_msg_add_int(&packer, emoticon);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_vote_option_remove(dd_demo_writer *dw, int tick, const char *description) {
+bool demo_w_write_msg_sv_vote_option_remove(dd_demo_writer *dw, const char *description) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_VOTEOPTIONREMOVE << 1);
   demo_msg_add_string(&packer, description);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int tick, int timeout, const char *description, const char *reason) {
+bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int timeout, const char *description, const char *reason) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2100,10 +2100,10 @@ bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int tick, int timeout, con
   demo_msg_add_string(&packer, description);
   demo_msg_add_string(&packer, reason);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int tick, int yes, int no, int pass, int total) {
+bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int yes, int no, int pass, int total) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2113,10 +2113,10 @@ bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int tick, int yes, int 
   demo_msg_add_int(&packer, pass);
   demo_msg_add_int(&packer, total);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int tick, int time, int check, int finish) {
+bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int time, int check, int finish) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2125,10 +2125,10 @@ bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int tick, int ti
   demo_msg_add_int(&packer, check);
   demo_msg_add_int(&packer, finish);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int tick, int server_time_best, int player_time_best) {
+bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int server_time_best, int player_time_best) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
@@ -2136,7 +2136,7 @@ bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int tick, int server_
   demo_msg_add_int(&packer, server_time_best);
   demo_msg_add_int(&packer, player_time_best);
   int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, tick, buffer, size);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
 #endif /* DDNET_DEMO_IMPLEMENTATION */

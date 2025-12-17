@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
     if (snap_size > 0) {
       demo_w_write_snap(writer, tick, snap_buf, snap_size);
     }
-    demo_w_write_msg_sv_chat(writer, tick, -2, 0, "HELLO WORLD");
+    demo_w_write_msg_sv_chat(writer, tick, -2, "HELLO WORLD");
   }
 
   printf("Wrote %d ticks of simulation.\n", demo_duration_ticks);
