@@ -2081,16 +2081,6 @@ bool demo_w_write_msg_sv_emoticon(dd_demo_writer *dw, int client_id, int emotico
   return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
-bool demo_w_write_msg_sv_vote_option_remove(dd_demo_writer *dw, const char *description) {
-  char buffer[DD_MAX_MESSAGE_SIZE];
-  dd_msg_packer packer;
-  demo_msg_init(&packer, buffer, sizeof(buffer));
-  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_VOTEOPTIONREMOVE << 1);
-  demo_msg_add_string(&packer, description);
-  int size = demo_msg_finish(&packer);
-  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
-}
-
 bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int timeout, const char *description, const char *reason) {
   char buffer[DD_MAX_MESSAGE_SIZE];
   dd_msg_packer packer;
