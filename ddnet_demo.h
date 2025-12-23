@@ -885,7 +885,7 @@ bool demo_w_finish(dd_demo_writer *dw);
 dd_demo_reader *demo_r_create(void);
 void demo_r_destroy(dd_demo_reader **dr_ptr);
 bool demo_r_open(dd_demo_reader *dr, FILE *f);
-const dd_demo_info *demo_r_get_info(const dd_demo_reader *dr);
+dd_demo_info *demo_r_get_info(dd_demo_reader *dr);
 bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk);
 int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpacked_snap);
 
@@ -1837,7 +1837,7 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f) {
   return true;
 }
 
-const dd_demo_info *demo_r_get_info(const dd_demo_reader *dr) { return &dr->info; }
+dd_demo_info *demo_r_get_info(dd_demo_reader *dr) { return &dr->info; }
 
 bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
   uint8_t header_byte;
