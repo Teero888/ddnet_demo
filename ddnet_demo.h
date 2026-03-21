@@ -1444,7 +1444,7 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
 
   int final_type = type;
 
-  if (type >= OFFSET_UUID) {
+  if (type >= OFFSET_UUID && type < DD_SNAPSHOT_MAX_TYPE - MAX_EXTENDED_ITEM_TYPES) {
     bool is_new = false;
     int extended_index = demo_sb_get_extended_item_type_index(sb, type, &is_new);
     if (extended_index == -1) {
