@@ -1,0 +1,3 @@
+[submodule "ddnet_maploader"]
+	path = ddnet_maploader
+	url = git@github.com:Teero888/ddnet_maploader.git

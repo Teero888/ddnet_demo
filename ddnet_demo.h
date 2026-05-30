@@ -863,6 +863,118 @@ typedef struct {
 
 /******************************************************************************
  *
+ * PHYSICS MODULE
+ *
+ ******************************************************************************/
+
+#include "ddnet_maploader/ddnet_map_loader.h"
+
+typedef struct {
+  float x, y;
+} dd_vec2;
+
+typedef struct {
+  // physics tuning
+  float ground_control_speed;
+  float ground_control_accel;
+  float ground_friction;
+  float ground_jump_impulse;
+  float air_jump_impulse;
+  float air_control_speed;
+  float air_control_accel;
+  float air_friction;
+  float hook_length;
+  float hook_fire_speed;
+  float hook_drag_accel;
+  float hook_drag_speed;
+  float gravity;
+  float velramp_start;
+  float velramp_range;
+  float velramp_curvature;
+  float hook_duration;
+} dd_phys_tuning;
+
+typedef struct {
+  dd_vec2 pos;
+  dd_vec2 vel;
+
+  dd_vec2 hook_pos;
+  dd_vec2 hook_dir;
+  dd_vec2 hook_tele_base;
+  int hook_tick;
+  int hook_state;
+  int hooked_player;
+  bool new_hook;
+
+  int jumped;
+  int jumped_total;
+  int jumps;
+
+  int direction;
+  int angle;
+
+  // ddrace
+  bool solo;
+  bool jetpack;
+  bool collision_disabled;
+  bool endless_hook;
+  bool endless_jump;
+  bool super;
+  bool hammer_hit_disabled;
+  bool shotgun_hit_disabled;
+  bool grenade_hit_disabled;
+  bool laser_hit_disabled;
+  bool hook_hit_disabled;
+  bool invincible;
+
+  // state
+  int move_restrictions;
+  bool colliding;
+  bool left_wall;
+} dd_phys_core;
+
+/* Hook states */
+enum {
+  DD_HOOK_RETRACTED = -1,
+  DD_HOOK_IDLE = 0,
+  DD_HOOK_RETRACT_START = 1,
+  DD_HOOK_RETRACT_END = 3,
+  DD_HOOK_FLYING = 4,
+  DD_HOOK_GRABBED = 5,
+};
+
+/* Move restrictions */
+enum {
+  DD_CANTMOVE_LEFT = 1 << 0,
+  DD_CANTMOVE_RIGHT = 1 << 1,
+  DD_CANTMOVE_UP = 1 << 2,
+  DD_CANTMOVE_DOWN = 1 << 3,
+};
+
+void dd_phys_init_tuning(dd_phys_tuning *tuning);
+void dd_phys_core_read(dd_phys_core *core, const dd_netobj_character_core *net_core);
+void dd_phys_core_read_ddnet(dd_phys_core *core, const dd_netobj_ddnet_character *net_ddnet);
+void dd_phys_core_write(const dd_phys_core *core, dd_netobj_character_core *net_core);
+void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map);
+void dd_phys_move(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map);
+void dd_phys_quantize(dd_phys_core *core);
+
+/*
+ * High-level physics state tracking
+ */
+typedef struct {
+  dd_phys_core players[64];
+  int last_base_tick[64];
+  bool active[64];
+  int current_tick;
+} dd_demo_phys_state;
+
+void dd_demo_phys_init(dd_demo_phys_state *state);
+void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int tick, const dd_phys_tuning *tuning, const map_data_t *map);
+void dd_demo_phys_advance_to(dd_demo_phys_state *state, int tick, const dd_phys_tuning *tuning, const map_data_t *map);
+
+/******************************************************************************
+ *
  * API
  *
  ******************************************************************************/
@@ -888,6 +1000,13 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f);
 dd_demo_info *demo_r_get_info(dd_demo_reader *dr);
 bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk);
 int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpacked_snap);
+bool demo_r_get_map_data(dd_demo_reader *dr, void *map_data_buffer, size_t buffer_size);
+
+/* Physics-aware reader API */
+bool demo_r_enable_phys(dd_demo_reader *dr, const map_data_t *map, const dd_phys_tuning *tuning);
+void demo_r_advance_to(dd_demo_reader *dr, int tick);
+int demo_r_get_phys_snap(dd_demo_reader *dr, void *snap_data);
+const dd_demo_phys_state *demo_r_get_phys_state(const dd_demo_reader *dr);
 
 /* Snapshot Builder API */
 dd_snapshot_builder *demo_sb_create(void);
@@ -1779,6 +1898,15 @@ struct dd_demo_reader {
   uint8_t last_snapshot_data[DD_SNAPSHOT_MAX_SIZE];
   dd_huffman_state huffman;
   short item_sizes[DD_MAX_NETOBJSIZES];
+
+  /* Optional physics tracking */
+  bool track_phys;
+  dd_demo_phys_state phys;
+  dd_phys_tuning tuning;
+  map_data_t map;
+
+  /* Internal map extraction */
+  int64_t map_start_pos;
 };
 
 static void dd_reader_init_netobj_sizes(dd_demo_reader *dr);
@@ -1832,9 +1960,79 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f) {
     dd_fseek(f, pos_after_header, SEEK_SET);
   }
 
+  dr->map_start_pos = dd_ftell(f);
   dd_fseek(f, dr->info.map_size, SEEK_CUR);
 
   return true;
+}
+
+bool demo_r_get_map_data(dd_demo_reader *dr, void *map_data_buffer, size_t buffer_size) {
+  if (!dr || !dr->file || dr->info.map_size == 0) return false;
+  if (buffer_size < dr->info.map_size) return false;
+
+  int64_t current_pos = dd_ftell(dr->file);
+  dd_fseek(dr->file, dr->map_start_pos, SEEK_SET);
+  size_t read_bytes = fread(map_data_buffer, 1, dr->info.map_size, dr->file);
+  dd_fseek(dr->file, current_pos, SEEK_SET);
+
+  return read_bytes == dr->info.map_size;
+}
+
+bool demo_r_enable_phys(dd_demo_reader *dr, const map_data_t *map, const dd_phys_tuning *tuning) {
+  dr->track_phys = true;
+  if (map) {
+    dr->map = *map;
+  } else {
+    /* Try to load map from internal demo data */
+    if (dr->info.map_size > 0) {
+      unsigned char *map_buf = (unsigned char *)malloc(dr->info.map_size);
+      if (map_buf && demo_r_get_map_data(dr, map_buf, dr->info.map_size)) {
+        dr->map = load_map_from_memory(map_buf, dr->info.map_size);
+        /* Note: we don't free map_buf here as load_map_from_memory might keep a reference,
+           but map_data_t's free_map_data will handle it if we store it in _map_file_data. */
+      } else {
+        if (map_buf) free(map_buf);
+        dr->track_phys = false;
+        return false;
+      }
+    } else {
+      dr->track_phys = false;
+      return false;
+    }
+  }
+  if (tuning)
+    dr->tuning = *tuning;
+  else
+    dd_phys_init_tuning(&dr->tuning);
+  dd_demo_phys_init(&dr->phys);
+  return true;
+}
+
+void demo_r_advance_to(dd_demo_reader *dr, int tick) {
+  if (dr->track_phys) {
+    dd_demo_phys_advance_to(&dr->phys, tick, &dr->tuning, &dr->map);
+    dr->current_tick = tick;
+  }
+}
+
+const dd_demo_phys_state *demo_r_get_phys_state(const dd_demo_reader *dr) {
+  return &dr->phys;
+}
+
+int demo_r_get_phys_snap(dd_demo_reader *dr, void *snap_data) {
+  dd_snapshot_builder *sb = demo_sb_create();
+  for (int i = 0; i < 64; i++) {
+    if (dr->phys.active[i] || dr->phys.last_base_tick[i] != -1) {
+      dd_netobj_character *char_obj = (dd_netobj_character *)demo_sb_add_item(sb, DD_NETOBJTYPE_CHARACTER, i, sizeof(dd_netobj_character));
+      if (char_obj) {
+        dd_phys_core_write(&dr->phys.players[i], &char_obj->core);
+        char_obj->core.m_Tick = dr->phys.last_base_tick[i];
+      }
+    }
+  }
+  int size = demo_sb_finish(sb, snap_data);
+  demo_sb_destroy(&sb);
+  return size;
 }
 
 dd_demo_info *demo_r_get_info(dd_demo_reader *dr) { return &dr->info; }
@@ -1857,6 +2055,10 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
       chunk->tick = dr->current_tick;
       chunk->size = 0;
       chunk->data = NULL;
+
+      if (dr->track_phys) {
+        dd_demo_phys_advance_to(&dr->phys, dr->current_tick, &dr->tuning, &dr->map);
+      }
       return true;
     }
 
@@ -1888,6 +2090,9 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
     case DD_CHUNKTYPE_SNAPSHOT:
       chunk->type = DD_CHUNK_SNAP;
       memcpy(dr->last_snapshot_data, chunk->data, chunk->size);
+      if (dr->track_phys) {
+        dd_demo_phys_update(&dr->phys, (const dd_snapshot *)chunk->data, chunk->tick, &dr->tuning, &dr->map);
+      }
       break;
     case DD_CHUNKTYPE_DELTA:
       chunk->type = DD_CHUNK_SNAP_DELTA;
@@ -1988,6 +2193,9 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpack
 
   if (final_size > 0) {
     memcpy(dr->last_snapshot_data, unpacked_snap_data, final_size);
+    if (dr->track_phys) {
+      dd_demo_phys_update(&dr->phys, (const dd_snapshot *)unpacked_snap_data, dr->current_tick, &dr->tuning, &dr->map);
+    }
   }
 
   return final_size;
@@ -2127,6 +2335,428 @@ bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int server_time_best,
   demo_msg_add_int(&packer, player_time_best);
   int size = demo_msg_finish(&packer);
   return (size >= 0) && demo_w_write_msg(dw, buffer, size);
+}
+
+#include <math.h>
+
+/******************************************************************************
+ * PHYSICS MODULE IMPLEMENTATION
+ *
+ * See https://github.com/heinrich5991/libtw2/doc/dead_reckoning.md for more info. (i hope it is merged by the time you read this)
+ ******************************************************************************/
+
+static inline float dd_length(dd_vec2 v) { return sqrtf(v.x * v.x + v.y * v.y); }
+static inline dd_vec2 dd_normalize(dd_vec2 v) {
+  float l = dd_length(v);
+  if (l == 0) return (dd_vec2){0, 0};
+  return (dd_vec2){v.x / l, v.y / l};
+}
+static inline float dd_distance(dd_vec2 a, dd_vec2 b) { return dd_length((dd_vec2){a.x - b.x, a.y - b.y}); }
+static inline dd_vec2 dd_mix(dd_vec2 a, dd_vec2 b, float amount) {
+  return (dd_vec2){a.x + (b.x - a.x) * amount, a.y + (b.y - a.y) * amount};
+}
+static inline int dd_round_to_int(float f) {
+  if (f > 0) return (int)(f + 0.5f);
+  return (int)(f - 0.5f);
+}
+static inline float dd_clamp(float v, float min, float max) {
+  if (v < min) return min;
+  if (v > max) return max;
+  return v;
+}
+static inline float dd_saturated_add(float min, float max, float current, float modifier) {
+  if (modifier < 0) {
+    if (current < min) return current;
+    current += modifier;
+    if (current < min) current = min;
+    return current;
+  } else {
+    if (current > max) return current;
+    current += modifier;
+    if (current > max) current = max;
+    return current;
+  }
+}
+
+void dd_phys_init_tuning(dd_phys_tuning *tuning) {
+  tuning->ground_control_speed = 10.0f;
+  tuning->ground_control_accel = 100.0f / 50.0f;
+  tuning->ground_friction = 0.5f;
+  tuning->ground_jump_impulse = 13.2f;
+  tuning->air_jump_impulse = 12.0f;
+  tuning->air_control_speed = 250.0f / 50.0f;
+  tuning->air_control_accel = 1.5f;
+  tuning->air_friction = 0.95f;
+  tuning->hook_length = 380.0f;
+  tuning->hook_fire_speed = 80.0f;
+  tuning->hook_drag_accel = 3.0f;
+  tuning->hook_drag_speed = 15.0f;
+  tuning->gravity = 0.5f;
+  tuning->velramp_start = 550.0f;
+  tuning->velramp_range = 2000.0f;
+  tuning->velramp_curvature = 1.4f;
+  tuning->hook_duration = 1.25f;
+}
+
+void dd_phys_core_read(dd_phys_core *core, const dd_netobj_character_core *net_core) {
+  core->pos.x = (float)net_core->m_X;
+  core->pos.y = (float)net_core->m_Y;
+  core->vel.x = (float)net_core->m_VelX / 256.0f;
+  core->vel.y = (float)net_core->m_VelY / 256.0f;
+  core->hook_pos.x = (float)net_core->m_HookX;
+  core->hook_pos.y = (float)net_core->m_HookY;
+  core->hook_dir.x = (float)net_core->m_HookDx / 256.0f;
+  core->hook_dir.y = (float)net_core->m_HookDy / 256.0f;
+  core->hook_tick = net_core->m_HookTick;
+  core->hook_state = net_core->m_HookState;
+  core->hooked_player = net_core->m_HookedPlayer;
+  core->jumped = net_core->m_Jumped;
+  core->direction = net_core->m_Direction;
+  core->angle = net_core->m_Angle;
+}
+
+void dd_phys_core_read_ddnet(dd_phys_core *core, const dd_netobj_ddnet_character *net_ddnet) {
+  core->solo = (net_ddnet->m_Flags & DD_CHARACTERFLAG_SOLO) != 0;
+  core->jetpack = (net_ddnet->m_Flags & DD_CHARACTERFLAG_JETPACK) != 0;
+  core->collision_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_COLLISION_DISABLED) != 0;
+  core->endless_hook = (net_ddnet->m_Flags & DD_CHARACTERFLAG_ENDLESS_HOOK) != 0;
+  core->endless_jump = (net_ddnet->m_Flags & DD_CHARACTERFLAG_ENDLESS_JUMP) != 0;
+  core->super = (net_ddnet->m_Flags & DD_CHARACTERFLAG_SUPER) != 0;
+  core->hammer_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_HAMMER_HIT_DISABLED) != 0;
+  core->shotgun_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED) != 0;
+  core->grenade_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_GRENADE_HIT_DISABLED) != 0;
+  core->laser_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_LASER_HIT_DISABLED) != 0;
+  core->hook_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_HOOK_HIT_DISABLED) != 0;
+  core->invincible = (net_ddnet->m_Flags & DD_CHARACTERFLAG_INVINCIBLE) != 0;
+}
+
+void dd_phys_core_write(const dd_phys_core *core, dd_netobj_character_core *net_core) {
+  net_core->m_X = dd_round_to_int(core->pos.x);
+  net_core->m_Y = dd_round_to_int(core->pos.y);
+  net_core->m_VelX = dd_round_to_int(core->vel.x * 256.0f);
+  net_core->m_VelY = dd_round_to_int(core->vel.y * 256.0f);
+  net_core->m_HookX = dd_round_to_int(core->hook_pos.x);
+  net_core->m_HookY = dd_round_to_int(core->hook_pos.y);
+  net_core->m_HookDx = dd_round_to_int(core->hook_dir.x * 256.0f);
+  net_core->m_HookDy = dd_round_to_int(core->hook_dir.y * 256.0f);
+  net_core->m_HookTick = core->hook_tick;
+  net_core->m_HookState = core->hook_state;
+  net_core->m_HookedPlayer = core->hooked_player;
+  net_core->m_Jumped = core->jumped;
+  net_core->m_Direction = core->direction;
+  net_core->m_Angle = core->angle;
+}
+
+/* Collision implementation */
+
+static int dd_col_get_tile(const map_data_t *map, int x, int y) {
+  if (!map->game_layer.data) return 0;
+  int nx = dd_clamp(x / 32, 0, map->width - 1);
+  int ny = dd_clamp(y / 32, 0, map->height - 1);
+  int index = ny * map->width + nx;
+  int tile = map->game_layer.data[index];
+  if (tile >= TILE_SOLID && tile <= TILE_NOLASER) return tile;
+  return 0;
+}
+
+static bool dd_col_is_solid(const map_data_t *map, int x, int y) {
+  int tile = dd_col_get_tile(map, x, y);
+  return tile == TILE_SOLID || tile == TILE_NOHOOK;
+}
+
+static bool dd_col_check_point(const map_data_t *map, float x, float y) {
+  return dd_col_is_solid(map, dd_round_to_int(x), dd_round_to_int(y));
+}
+
+static bool dd_col_test_box(const map_data_t *map, dd_vec2 pos, dd_vec2 size) {
+  size.x *= 0.5f;
+  size.y *= 0.5f;
+  if (dd_col_check_point(map, pos.x - size.x, pos.y - size.y)) return true;
+  if (dd_col_check_point(map, pos.x + size.x, pos.y - size.y)) return true;
+  if (dd_col_check_point(map, pos.x - size.x, pos.y + size.y)) return true;
+  if (dd_col_check_point(map, pos.x + size.x, pos.y + size.y)) return true;
+  return false;
+}
+
+static int dd_col_get_move_restrictions_raw(int direction, int tile, int flags) {
+  flags &= (TILEFLAG_XFLIP | TILEFLAG_YFLIP | TILEFLAG_ROTATE);
+  switch (tile) {
+  case TILE_STOP:
+    switch (flags) {
+    case ROTATION_0: return DD_CANTMOVE_DOWN;
+    case ROTATION_90: return DD_CANTMOVE_LEFT;
+    case ROTATION_180: return DD_CANTMOVE_UP;
+    case ROTATION_270: return DD_CANTMOVE_RIGHT;
+    case (TILEFLAG_YFLIP ^ ROTATION_0): return DD_CANTMOVE_UP;
+    case (TILEFLAG_YFLIP ^ ROTATION_90): return DD_CANTMOVE_RIGHT;
+    case (TILEFLAG_YFLIP ^ ROTATION_180): return DD_CANTMOVE_DOWN;
+    case (TILEFLAG_YFLIP ^ ROTATION_270): return DD_CANTMOVE_LEFT;
+    }
+    break;
+  case TILE_STOPS:
+    switch (flags) {
+    case ROTATION_0:
+    case ROTATION_180:
+    case (TILEFLAG_YFLIP ^ ROTATION_0):
+    case (TILEFLAG_YFLIP ^ ROTATION_180): return DD_CANTMOVE_DOWN | DD_CANTMOVE_UP;
+    case ROTATION_90:
+    case ROTATION_270:
+    case (TILEFLAG_YFLIP ^ ROTATION_90):
+    case (TILEFLAG_YFLIP ^ ROTATION_270): return DD_CANTMOVE_LEFT | DD_CANTMOVE_RIGHT;
+    }
+    break;
+  case TILE_STOPA: return DD_CANTMOVE_LEFT | DD_CANTMOVE_RIGHT | DD_CANTMOVE_UP | DD_CANTMOVE_DOWN;
+  }
+  return 0;
+}
+
+static int dd_col_get_move_restrictions(const map_data_t *map, dd_vec2 pos) {
+  int nx = dd_clamp(dd_round_to_int(pos.x) / 32, 0, map->width - 1);
+  int ny = dd_clamp(dd_round_to_int(pos.y) / 32, 0, map->height - 1);
+  int index = ny * map->width + nx;
+
+  int restrictions = 0;
+  if (map->game_layer.data) {
+    restrictions |= dd_col_get_move_restrictions_raw(0, map->game_layer.data[index], map->game_layer.flags[index]);
+  }
+  if (map->front_layer.data) {
+    restrictions |= dd_col_get_move_restrictions_raw(0, map->front_layer.data[index], map->front_layer.flags[index]);
+  }
+  return restrictions;
+}
+
+static bool dd_col_is_on_ground(const map_data_t *map, dd_vec2 pos, float size) {
+  if (dd_col_check_point(map, pos.x + size / 2.0f, pos.y + size / 2.0f + 5.0f)) return true;
+  if (dd_col_check_point(map, pos.x - size / 2.0f, pos.y + size / 2.0f + 5.0f)) return true;
+  return false;
+}
+
+static void dd_col_move_box(const map_data_t *map, dd_vec2 *p_pos, dd_vec2 *p_vel, dd_vec2 size, dd_vec2 elasticity, bool *p_grounded) {
+  dd_vec2 pos = *p_pos;
+  dd_vec2 vel = *p_vel;
+
+  float distance = dd_length(vel);
+  int max_steps = (int)distance;
+
+  if (distance > 0.00001f) {
+    float fraction = 1.0f / (float)(max_steps + 1);
+    float elasticity_x = dd_clamp(elasticity.x, -1.0f, 1.0f);
+    float elasticity_y = dd_clamp(elasticity.y, -1.0f, 1.0f);
+
+    for (int i = 0; i <= max_steps; i++) {
+      if (vel.x == 0 && vel.y == 0) break;
+
+      dd_vec2 next_pos = {pos.x + vel.x * fraction, pos.y + vel.y * fraction};
+      if (next_pos.x == pos.x && next_pos.y == pos.y) break;
+
+      if (dd_col_test_box(map, next_pos, size)) {
+        int hits = 0;
+        if (dd_col_test_box(map, (dd_vec2){pos.x, next_pos.y}, size)) {
+          if (p_grounded && elasticity_y > 0 && vel.y > 0) *p_grounded = true;
+          next_pos.y = pos.y;
+          vel.y *= -elasticity_y;
+          hits++;
+        }
+        if (dd_col_test_box(map, (dd_vec2){next_pos.x, pos.y}, size)) {
+          next_pos.x = pos.x;
+          vel.x *= -elasticity_x;
+          hits++;
+        }
+        if (hits == 0) {
+          if (p_grounded && elasticity_y > 0 && vel.y > 0) *p_grounded = true;
+          next_pos.y = pos.y;
+          vel.y *= -elasticity_y;
+          next_pos.x = pos.x;
+          vel.x *= -elasticity_x;
+        }
+      }
+      pos = next_pos;
+    }
+  }
+
+  *p_pos = pos;
+  *p_vel = vel;
+}
+
+static int dd_col_intersect_line_tele_hook(const map_data_t *map, dd_vec2 pos0, dd_vec2 pos1, dd_vec2 *p_out_collision, dd_vec2 *p_out_before_collision) {
+  float distance = dd_distance(pos0, pos1);
+  int end = (int)distance + 1;
+  dd_vec2 last = pos0;
+  for (int i = 0; i <= end; i++) {
+    float a = i / (float)end;
+    dd_vec2 pos = dd_mix(pos0, pos1, a);
+    if (dd_col_check_point(map, pos.x, pos.y)) {
+      if (p_out_collision) *p_out_collision = pos;
+      if (p_out_before_collision) *p_out_before_collision = last;
+      return 1; // Simplified: just return 1 if hit
+    }
+    last = pos;
+  }
+  if (p_out_collision) *p_out_collision = pos1;
+  if (p_out_before_collision) *p_out_before_collision = pos1;
+  return 0;
+}
+
+static dd_vec2 dd_clamp_vel(int move_restriction, dd_vec2 vel) {
+  if (vel.x > 0 && (move_restriction & DD_CANTMOVE_RIGHT)) vel.x = 0;
+  if (vel.x < 0 && (move_restriction & DD_CANTMOVE_LEFT)) vel.x = 0;
+  if (vel.y > 0 && (move_restriction & DD_CANTMOVE_DOWN)) vel.y = 0;
+  if (vel.y < 0 && (move_restriction & DD_CANTMOVE_UP)) vel.y = 0;
+  return vel;
+}
+
+static float dd_phys_velocity_ramp(float value, float start, float range, float curvature) {
+  if (value < start) return 1.0f;
+  return 1.0f / powf(curvature, (value - start) / range);
+}
+
+void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map) {
+  core->move_restrictions = dd_col_get_move_restrictions(map, core->pos);
+
+  float gravity = tuning->gravity;
+  float friction = tuning->ground_friction;
+  float accel = tuning->ground_control_accel;
+  float max_speed = tuning->ground_control_speed;
+
+  bool grounded = dd_col_is_on_ground(map, core->pos, 28.0f);
+
+  if (!grounded) {
+    friction = tuning->air_friction;
+    accel = tuning->air_control_accel;
+    max_speed = tuning->air_control_speed;
+  }
+
+  core->vel.y += gravity;
+  core->vel.x *= friction;
+
+  if (core->direction < 0)
+    core->vel.x = dd_saturated_add(-max_speed, max_speed, core->vel.x, -accel);
+  else if (core->direction > 0)
+    core->vel.x = dd_saturated_add(-max_speed, max_speed, core->vel.x, accel);
+
+  // Hook logic
+  if (core->hook_state == DD_HOOK_IDLE) {
+    core->hooked_player = -1;
+    core->hook_pos = core->pos;
+  } else if (core->hook_state >= DD_HOOK_RETRACT_START && core->hook_state < DD_HOOK_RETRACT_END) {
+    core->hook_state++;
+  } else if (core->hook_state == DD_HOOK_RETRACT_END) {
+    core->hook_state = DD_HOOK_RETRACTED;
+  } else if (core->hook_state == DD_HOOK_FLYING) {
+    dd_vec2 new_hook_pos = {core->hook_pos.x + core->hook_dir.x * tuning->hook_fire_speed,
+                            core->hook_pos.y + core->hook_dir.y * tuning->hook_fire_speed};
+    if (dd_distance(core->pos, new_hook_pos) > tuning->hook_length) {
+      core->hook_state = DD_HOOK_RETRACT_START;
+      dd_vec2 temp_dir = dd_normalize((dd_vec2){new_hook_pos.x - core->pos.x, new_hook_pos.y - core->pos.y});
+      new_hook_pos.x = core->pos.x + temp_dir.x * tuning->hook_length;
+      new_hook_pos.y = core->pos.y + temp_dir.y * tuning->hook_length;
+    }
+
+    int hit = dd_col_intersect_line_tele_hook(map, core->hook_pos, new_hook_pos, &new_hook_pos, NULL);
+    if (hit) {
+      core->hook_state = DD_HOOK_GRABBED;
+    }
+    core->hook_pos = new_hook_pos;
+  }
+
+  if (core->hook_state == DD_HOOK_GRABBED) {
+    if (core->hooked_player == -1) {
+      dd_vec2 dir = dd_normalize((dd_vec2){core->hook_pos.x - core->pos.x, core->hook_pos.y - core->pos.y});
+      float distance = dd_distance(core->pos, core->hook_pos);
+      if (distance > 46.0f) {
+        core->vel.x += dir.x * tuning->hook_drag_accel * (distance > tuning->hook_length ? 1.0f : (distance - 46.0f) / (tuning->hook_length - 46.0f));
+        core->vel.y += dir.y * tuning->hook_drag_accel * (distance > tuning->hook_length ? 1.0f : (distance - 46.0f) / (tuning->hook_length - 46.0f));
+      }
+    }
+    core->hook_tick = 0;
+  }
+
+  core->vel = dd_clamp_vel(core->move_restrictions, core->vel);
+
+  float speed = dd_length(core->vel);
+  if (speed > 6000.0f) {
+    core->vel.x = (core->vel.x / speed) * 6000.0f;
+    core->vel.y = (core->vel.y / speed) * 6000.0f;
+  }
+
+  dd_phys_move(core, tuning, map);
+}
+
+void dd_phys_move(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map) {
+  float ramp_value = dd_phys_velocity_ramp(dd_length(core->vel) * 50.0f, tuning->velramp_start, tuning->velramp_range, tuning->velramp_curvature);
+  core->vel.x *= ramp_value;
+
+  dd_vec2 elasticity = {0, 0};
+  dd_col_move_box(map, &core->pos, &core->vel, (dd_vec2){28.0f, 28.0f}, elasticity, NULL);
+
+  core->vel.x /= ramp_value;
+}
+
+void dd_phys_quantize(dd_phys_core *core) {
+  dd_netobj_character_core net_core;
+  dd_phys_core_write(core, &net_core);
+  dd_phys_core_read(core, &net_core);
+}
+
+void dd_demo_phys_init(dd_demo_phys_state *state) {
+  memset(state, 0, sizeof(*state));
+  for (int i = 0; i < 64; i++) state->last_base_tick[i] = -1;
+  state->current_tick = -1;
+}
+
+void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int tick, const dd_phys_tuning *tuning, const map_data_t *map) {
+  if (state->current_tick == -1) state->current_tick = tick;
+
+  bool in_snap[64] = {0};
+  for (int i = 0; i < snap->num_items; i++) {
+    const dd_snap_item *item = dd_snap_get_item(snap, i);
+    int type = dd_snap_item_type(item);
+    int id = dd_snap_item_id(item);
+    if (type == DD_NETOBJTYPE_CHARACTER && id >= 0 && id < 64) {
+      in_snap[id] = true;
+      const dd_netobj_character *char_obj = (const dd_netobj_character *)dd_snap_item_data(item);
+      const dd_netobj_character_core *net_core = &char_obj->core;
+
+      const dd_snap_item *ex_item = dd_snap_find_item(snap, DD_NETOBJTYPE_DDNETCHARACTER, id);
+      const dd_netobj_ddnet_character *net_ddnet = ex_item ? (const dd_netobj_ddnet_character *)dd_snap_item_data(ex_item) : NULL;
+
+      int base_tick = net_core->m_Tick;
+      if (base_tick <= 0) base_tick = tick;
+
+      if (state->last_base_tick[id] != base_tick) {
+        dd_phys_core_read(&state->players[id], net_core);
+        if (net_ddnet) dd_phys_core_read_ddnet(&state->players[id], net_ddnet);
+        state->last_base_tick[id] = base_tick;
+      }
+    }
+  }
+
+  for (int id = 0; id < 64; id++) {
+    if (state->last_base_tick[id] != -1) {
+      while (state->last_base_tick[id] < tick) {
+        dd_phys_tick(&state->players[id], tuning, map);
+        state->last_base_tick[id]++;
+      }
+      if (!in_snap[id]) {
+        state->last_base_tick[id] = -1;
+      }
+    }
+  }
+
+  state->current_tick = tick;
+}
+
+void dd_demo_phys_advance_to(dd_demo_phys_state *state, int tick, const dd_phys_tuning *tuning, const map_data_t *map) {
+  if (state->current_tick >= tick) return;
+  while (state->current_tick < tick) {
+    state->current_tick++;
+    for (int id = 0; id < 64; id++) {
+      if (state->last_base_tick[id] != -1) {
+        dd_phys_tick(&state->players[id], tuning, map);
+        state->last_base_tick[id]++;
+      }
+    }
+  }
 }
 
 #endif /* DDNET_DEMO_IMPLEMENTATION */
