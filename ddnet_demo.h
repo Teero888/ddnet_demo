@@ -474,7 +474,7 @@ enum {
   DD_GAMEINFOFLAG_ENTITIES_FNG = 1 << 28,
   DD_GAMEINFOFLAG_ENTITIES_VANILLA = 1 << 29,
   DD_GAMEINFOFLAG_DONT_MASK_ENTITIES = 1 << 30,
-  DD_GAMEINFOFLAG_ENTITIES_BW = 1 << 31,
+  DD_GAMEINFOFLAG_ENTITIES_BW = (int)(1U << 31),
 };
 enum {
   DD_GAMEINFOFLAG2_ALLOW_X_SKINS = 1 << 0,
@@ -931,6 +931,26 @@ typedef struct {
   int move_restrictions;
   bool colliding;
   bool left_wall;
+  dd_netobj_player_input input;
+
+  // character state fields
+  int weapon;
+  int attack_tick;
+  int player_flags;
+  int health;
+  int armor;
+  int ammo_count;
+  int emote;
+
+  // ddnet character fields
+  bool has_ddnet_char;
+  int ddnet_flags;
+  int freeze_end;
+  int tele_checkpoint;
+  int strong_weak_id;
+  int ninja_activation_tick;
+  int freeze_start;
+  int tune_zone_override;
 } dd_phys_core;
 
 /* Hook states */
@@ -955,7 +975,7 @@ void dd_phys_init_tuning(dd_phys_tuning *tuning);
 void dd_phys_core_read(dd_phys_core *core, const dd_netobj_character_core *net_core);
 void dd_phys_core_read_ddnet(dd_phys_core *core, const dd_netobj_ddnet_character *net_ddnet);
 void dd_phys_core_write(const dd_phys_core *core, dd_netobj_character_core *net_core);
-void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map);
+
 void dd_phys_move(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map);
 void dd_phys_quantize(dd_phys_core *core);
 
@@ -968,6 +988,8 @@ typedef struct {
   bool active[64];
   int current_tick;
 } dd_demo_phys_state;
+
+void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map, dd_demo_phys_state *world, bool use_input);
 
 void dd_demo_phys_init(dd_demo_phys_state *state);
 void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int tick, const dd_phys_tuning *tuning, const map_data_t *map);
@@ -1007,6 +1029,7 @@ bool demo_r_enable_phys(dd_demo_reader *dr, const map_data_t *map, const dd_phys
 void demo_r_advance_to(dd_demo_reader *dr, int tick);
 int demo_r_get_phys_snap(dd_demo_reader *dr, void *snap_data);
 const dd_demo_phys_state *demo_r_get_phys_state(const dd_demo_reader *dr);
+bool demo_r_preprocess_dead_reckoning(dd_demo_reader *dr, dd_demo_writer *dw);
 
 /* Snapshot Builder API */
 dd_snapshot_builder *demo_sb_create(void);
@@ -2027,6 +2050,64 @@ int demo_r_get_phys_snap(dd_demo_reader *dr, void *snap_data) {
       if (char_obj) {
         dd_phys_core_write(&dr->phys.players[i], &char_obj->core);
         char_obj->core.m_Tick = dr->phys.last_base_tick[i];
+
+        char_obj->m_Weapon = dr->phys.players[i].weapon;
+        char_obj->m_PlayerFlags = dr->phys.players[i].player_flags;
+        char_obj->m_Health = dr->phys.players[i].health;
+        char_obj->m_Armor = dr->phys.players[i].armor;
+        char_obj->m_AmmoCount = dr->phys.players[i].ammo_count;
+        char_obj->m_Emote = dr->phys.players[i].emote;
+        char_obj->m_AttackTick = dr->phys.players[i].attack_tick;
+      }
+
+      if (dr->phys.players[i].has_ddnet_char) {
+        dd_netobj_ddnet_character *ddnet_char = (dd_netobj_ddnet_character *)demo_sb_add_item(sb, DD_NETOBJTYPE_DDNETCHARACTER, i, sizeof(dd_netobj_ddnet_character));
+        if (ddnet_char) {
+          int flags = dr->phys.players[i].ddnet_flags;
+          flags &= ~(DD_CHARACTERFLAG_SOLO | DD_CHARACTERFLAG_JETPACK | DD_CHARACTERFLAG_COLLISION_DISABLED |
+                     DD_CHARACTERFLAG_ENDLESS_HOOK | DD_CHARACTERFLAG_ENDLESS_JUMP | DD_CHARACTERFLAG_SUPER |
+                     DD_CHARACTERFLAG_HAMMER_HIT_DISABLED | DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED |
+                     DD_CHARACTERFLAG_GRENADE_HIT_DISABLED | DD_CHARACTERFLAG_LASER_HIT_DISABLED |
+                     DD_CHARACTERFLAG_HOOK_HIT_DISABLED | DD_CHARACTERFLAG_INVINCIBLE);
+          if (dr->phys.players[i].solo) flags |= DD_CHARACTERFLAG_SOLO;
+          if (dr->phys.players[i].jetpack) flags |= DD_CHARACTERFLAG_JETPACK;
+          if (dr->phys.players[i].collision_disabled) flags |= DD_CHARACTERFLAG_COLLISION_DISABLED;
+          if (dr->phys.players[i].endless_hook) flags |= DD_CHARACTERFLAG_ENDLESS_HOOK;
+          if (dr->phys.players[i].endless_jump) flags |= DD_CHARACTERFLAG_ENDLESS_JUMP;
+          if (dr->phys.players[i].super) flags |= DD_CHARACTERFLAG_SUPER;
+          if (dr->phys.players[i].hammer_hit_disabled) flags |= DD_CHARACTERFLAG_HAMMER_HIT_DISABLED;
+          if (dr->phys.players[i].shotgun_hit_disabled) flags |= DD_CHARACTERFLAG_SHOTGUN_HIT_DISABLED;
+          if (dr->phys.players[i].grenade_hit_disabled) flags |= DD_CHARACTERFLAG_GRENADE_HIT_DISABLED;
+          if (dr->phys.players[i].laser_hit_disabled) flags |= DD_CHARACTERFLAG_LASER_HIT_DISABLED;
+          if (dr->phys.players[i].hook_hit_disabled) flags |= DD_CHARACTERFLAG_HOOK_HIT_DISABLED;
+          if (dr->phys.players[i].invincible) flags |= DD_CHARACTERFLAG_INVINCIBLE;
+
+          ddnet_char->m_Flags = flags;
+          ddnet_char->m_FreezeEnd = dr->phys.players[i].freeze_end;
+          ddnet_char->m_Jumps = dr->phys.players[i].jumps;
+          ddnet_char->m_TeleCheckpoint = dr->phys.players[i].tele_checkpoint;
+          ddnet_char->m_StrongWeakId = dr->phys.players[i].strong_weak_id;
+          ddnet_char->m_JumpedTotal = dr->phys.players[i].jumped_total;
+          ddnet_char->m_NinjaActivationTick = dr->phys.players[i].ninja_activation_tick;
+          ddnet_char->m_FreezeStart = dr->phys.players[i].freeze_start;
+          ddnet_char->m_TargetX = dr->phys.players[i].input.m_TargetX;
+          ddnet_char->m_TargetY = dr->phys.players[i].input.m_TargetY;
+          ddnet_char->m_TuneZoneOverride = dr->phys.players[i].tune_zone_override;
+        }
+      }
+
+      dd_netobj_player_input *pi_obj = (dd_netobj_player_input *)demo_sb_add_item(sb, DD_NETOBJTYPE_PLAYERINPUT, i, sizeof(dd_netobj_player_input));
+      if (pi_obj) {
+        pi_obj->m_Direction = dr->phys.players[i].input.m_Direction;
+        pi_obj->m_TargetX = dr->phys.players[i].input.m_TargetX;
+        pi_obj->m_TargetY = dr->phys.players[i].input.m_TargetY;
+        pi_obj->m_Jump = dr->phys.players[i].input.m_Jump;
+        pi_obj->m_Fire = dr->phys.players[i].input.m_Fire;
+        pi_obj->m_Hook = dr->phys.players[i].input.m_Hook;
+        pi_obj->m_PlayerFlags = dr->phys.players[i].input.m_PlayerFlags;
+        pi_obj->m_WantedWeapon = dr->phys.players[i].input.m_WantedWeapon;
+        pi_obj->m_NextWeapon = dr->phys.players[i].input.m_NextWeapon;
+        pi_obj->m_PrevWeapon = dr->phys.players[i].input.m_PrevWeapon;
       }
     }
   }
@@ -2585,10 +2666,11 @@ static int dd_col_intersect_line_tele_hook(const map_data_t *map, dd_vec2 pos0, 
   for (int i = 0; i <= end; i++) {
     float a = i / (float)end;
     dd_vec2 pos = dd_mix(pos0, pos1, a);
-    if (dd_col_check_point(map, pos.x, pos.y)) {
+    int tile = dd_col_get_tile(map, dd_round_to_int(pos.x), dd_round_to_int(pos.y));
+    if (tile == TILE_SOLID || tile == TILE_NOHOOK) {
       if (p_out_collision) *p_out_collision = pos;
       if (p_out_before_collision) *p_out_before_collision = last;
-      return 1; // Simplified: just return 1 if hit
+      return tile;
     }
     last = pos;
   }
@@ -2610,29 +2692,95 @@ static float dd_phys_velocity_ramp(float value, float start, float range, float 
   return 1.0f / powf(curvature, (value - start) / range);
 }
 
-void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map) {
+void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map, dd_demo_phys_state *world, bool use_input) {
   core->move_restrictions = dd_col_get_move_restrictions(map, core->pos);
-
-  float gravity = tuning->gravity;
-  float friction = tuning->ground_friction;
-  float accel = tuning->ground_control_accel;
-  float max_speed = tuning->ground_control_speed;
 
   bool grounded = dd_col_is_on_ground(map, core->pos, 28.0f);
 
-  if (!grounded) {
-    friction = tuning->air_friction;
-    accel = tuning->air_control_accel;
-    max_speed = tuning->air_control_speed;
+  core->vel.y += tuning->gravity;
+
+  float friction = grounded ? tuning->ground_friction : tuning->air_friction;
+  float accel = grounded ? tuning->ground_control_accel : tuning->air_control_accel;
+  float max_speed = grounded ? tuning->ground_control_speed : tuning->air_control_speed;
+
+  if (use_input) {
+    core->direction = core->input.m_Direction;
+    float tx = core->input.m_TargetX;
+    float ty = core->input.m_TargetY;
+    float tmp_angle = atan2f(ty, tx);
+    if (tmp_angle < -(3.14159265358979323846f / 2.0f))
+      core->angle = (int)((tmp_angle + (2.0f * 3.14159265358979323846f)) * 256.0f);
+    else
+      core->angle = (int)(tmp_angle * 256.0f);
+
+    if (core->input.m_Hook) {
+      if (core->hook_state == DD_HOOK_IDLE) {
+        float len = sqrtf(tx * tx + ty * ty);
+        dd_vec2 target_dir = {0, 0};
+        if (len > 0.0001f) {
+          target_dir.x = tx / len;
+          target_dir.y = ty / len;
+        }
+        core->hook_state = DD_HOOK_FLYING;
+        core->hook_pos.x = core->pos.x + target_dir.x * 28.0f * 1.5f;
+        core->hook_pos.y = core->pos.y + target_dir.y * 28.0f * 1.5f;
+        core->hook_dir = target_dir;
+        core->hooked_player = -1;
+        core->hook_tick = 50.0f * (1.25f - tuning->hook_duration);
+      }
+    } else {
+      core->hooked_player = -1;
+      core->hook_state = DD_HOOK_IDLE;
+      core->hook_pos = core->pos;
+    }
+
+    if (core->input.m_Jump) {
+      if (!(core->jumped & 1)) {
+        if (grounded && (!(core->jumped & 2) || core->jumps != 0)) {
+          core->vel.y = -tuning->ground_jump_impulse;
+          if (core->jumps > 1) {
+            core->jumped |= 1;
+          } else {
+            core->jumped |= 3;
+          }
+          core->jumped_total = 0;
+        } else if (!(core->jumped & 2)) {
+          core->vel.y = -tuning->air_jump_impulse;
+          core->jumped |= 3;
+          core->jumped_total++;
+        }
+      }
+    } else {
+      core->jumped &= ~1;
+    }
   }
 
-  core->vel.y += gravity;
-  core->vel.x *= friction;
+  if (grounded) {
+    core->jumped &= ~2;
+    core->jumped_total = 0;
+  }
 
   if (core->direction < 0)
     core->vel.x = dd_saturated_add(-max_speed, max_speed, core->vel.x, -accel);
   else if (core->direction > 0)
     core->vel.x = dd_saturated_add(-max_speed, max_speed, core->vel.x, accel);
+  else
+    core->vel.x *= friction;
+
+  // Jump visual states
+  if (core->jumps == -1) {
+    core->jumped |= 2;
+  } else if (core->jumps == 0) {
+    core->jumped |= 2;
+  } else if (core->jumps == 1 && core->jumped > 0) {
+    core->jumped |= 2;
+  } else if (core->jumped_total < core->jumps - 1 && core->jumped > 1) {
+    core->jumped = 1;
+  }
+
+  if (core->endless_jump && core->jumped > 1) {
+    core->jumped = 1;
+  }
 
   // Hook logic
   if (core->hook_state == DD_HOOK_IDLE) {
@@ -2654,7 +2802,11 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
 
     int hit = dd_col_intersect_line_tele_hook(map, core->hook_pos, new_hook_pos, &new_hook_pos, NULL);
     if (hit) {
-      core->hook_state = DD_HOOK_GRABBED;
+      if (hit == TILE_NOHOOK) {
+        core->hook_state = DD_HOOK_RETRACT_START;
+      } else {
+        core->hook_state = DD_HOOK_GRABBED;
+      }
     }
     core->hook_pos = new_hook_pos;
   }
@@ -2664,11 +2816,41 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
       dd_vec2 dir = dd_normalize((dd_vec2){core->hook_pos.x - core->pos.x, core->hook_pos.y - core->pos.y});
       float distance = dd_distance(core->pos, core->hook_pos);
       if (distance > 46.0f) {
-        core->vel.x += dir.x * tuning->hook_drag_accel * (distance > tuning->hook_length ? 1.0f : (distance - 46.0f) / (tuning->hook_length - 46.0f));
-        core->vel.y += dir.y * tuning->hook_drag_accel * (distance > tuning->hook_length ? 1.0f : (distance - 46.0f) / (tuning->hook_length - 46.0f));
+        dd_vec2 hook_vel = {
+          dir.x * tuning->hook_drag_accel,
+          dir.y * tuning->hook_drag_accel
+        };
+        
+        if (hook_vel.y > 0) {
+          hook_vel.y *= 0.3f;
+        }
+        
+        if ((hook_vel.x < 0 && core->direction < 0) || (hook_vel.x > 0 && core->direction > 0)) {
+          hook_vel.x *= 0.95f;
+        } else {
+          hook_vel.x *= 0.75f;
+        }
+        
+        dd_vec2 new_vel = {
+          core->vel.x + hook_vel.x,
+          core->vel.y + hook_vel.y
+        };
+        
+        float new_vel_len = dd_length(new_vel);
+        float current_vel_len = dd_length(core->vel);
+        if (new_vel_len < tuning->hook_drag_speed || new_vel_len < current_vel_len) {
+          core->vel = new_vel;
+        }
       }
     }
-    core->hook_tick = 0;
+    core->hook_tick++;
+    if (core->hooked_player != -1) {
+      if (core->hook_tick > 50 + 50 / 5) {
+        core->hooked_player = -1;
+        core->hook_state = DD_HOOK_RETRACTED;
+        core->hook_pos = core->pos;
+      }
+    }
   }
 
   core->vel = dd_clamp_vel(core->move_restrictions, core->vel);
@@ -2680,6 +2862,7 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
   }
 
   dd_phys_move(core, tuning, map);
+  dd_phys_quantize(core);
 }
 
 void dd_phys_move(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map) {
@@ -2723,18 +2906,74 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
       int base_tick = net_core->m_Tick;
       if (base_tick <= 0) base_tick = tick;
 
-      if (state->last_base_tick[id] != base_tick) {
+      if (state->last_base_tick[id] <= base_tick || state->last_base_tick[id] == -1) {
+        int old_jumped = state->players[id].jumped;
+
         dd_phys_core_read(&state->players[id], net_core);
-        if (net_ddnet) dd_phys_core_read_ddnet(&state->players[id], net_ddnet);
+        if (net_ddnet) {
+          dd_phys_core_read_ddnet(&state->players[id], net_ddnet);
+          state->players[id].ddnet_flags = net_ddnet->m_Flags;
+          state->players[id].freeze_end = net_ddnet->m_FreezeEnd;
+          state->players[id].tele_checkpoint = net_ddnet->m_TeleCheckpoint;
+          state->players[id].strong_weak_id = net_ddnet->m_StrongWeakId;
+          state->players[id].ninja_activation_tick = net_ddnet->m_NinjaActivationTick;
+          state->players[id].freeze_start = net_ddnet->m_FreezeStart;
+          state->players[id].tune_zone_override = net_ddnet->m_TuneZoneOverride;
+          state->players[id].has_ddnet_char = true;
+        } else {
+          state->players[id].has_ddnet_char = false;
+        }
+
+        // Reconstruct inputs from character core
+        state->players[id].input.m_Direction = net_core->m_Direction;
+        state->players[id].input.m_Hook = net_core->m_HookState != 0;
+
+        float angle_rad = net_core->m_Angle / 256.0f;
+        state->players[id].input.m_TargetX = (int)(cosf(angle_rad) * 100.0f);
+        state->players[id].input.m_TargetY = (int)(sinf(angle_rad) * 100.0f);
+
+        // Weapon and flags reconstruction
+        state->players[id].weapon = char_obj->m_Weapon;
+        state->players[id].player_flags = char_obj->m_PlayerFlags;
+        state->players[id].health = char_obj->m_Health;
+        state->players[id].armor = char_obj->m_Armor;
+        state->players[id].ammo_count = char_obj->m_AmmoCount;
+        state->players[id].emote = char_obj->m_Emote;
+        state->players[id].attack_tick = char_obj->m_AttackTick;
+
+        state->players[id].input.m_WantedWeapon = char_obj->m_Weapon;
+
+        // Jump reconstruction
+        if (state->last_base_tick[id] != -1) {
+          if (net_core->m_Jumped != old_jumped && net_core->m_Jumped > 0) {
+            state->players[id].input.m_Jump = 1;
+          } else {
+            state->players[id].input.m_Jump = 0;
+          }
+        } else {
+          state->players[id].input.m_Jump = 0;
+        }
+
         state->last_base_tick[id] = base_tick;
       }
+    }
+  }
+
+  // Overwrite with actual player inputs if present
+  for (int i = 0; i < snap->num_items; i++) {
+    const dd_snap_item *item = dd_snap_get_item(snap, i);
+    int type = dd_snap_item_type(item);
+    int id = dd_snap_item_id(item);
+    if (type == DD_NETOBJTYPE_PLAYERINPUT && id >= 0 && id < 64) {
+      const dd_netobj_player_input *pi = (const dd_netobj_player_input *)dd_snap_item_data(item);
+      state->players[id].input = *pi;
     }
   }
 
   for (int id = 0; id < 64; id++) {
     if (state->last_base_tick[id] != -1) {
       while (state->last_base_tick[id] < tick) {
-        dd_phys_tick(&state->players[id], tuning, map);
+        dd_phys_tick(&state->players[id], tuning, map, NULL, true);
         state->last_base_tick[id]++;
       }
       if (!in_snap[id]) {
@@ -2752,11 +2991,55 @@ void dd_demo_phys_advance_to(dd_demo_phys_state *state, int tick, const dd_phys_
     state->current_tick++;
     for (int id = 0; id < 64; id++) {
       if (state->last_base_tick[id] != -1) {
-        dd_phys_tick(&state->players[id], tuning, map);
+        dd_phys_tick(&state->players[id], tuning, map, NULL, true);
         state->last_base_tick[id]++;
       }
     }
   }
+}
+
+bool demo_r_preprocess_dead_reckoning(dd_demo_reader *dr, dd_demo_writer *dw) {
+  dd_demo_chunk chunk;
+  uint8_t phys_snap[DD_SNAPSHOT_MAX_SIZE];
+  uint8_t unpacked_snap[DD_SNAPSHOT_MAX_SIZE];
+  int last_written_tick = -1;
+
+  bool original_track_phys = dr->track_phys;
+  dr->track_phys = false;
+
+  while (demo_r_next_chunk(dr, &chunk)) {
+    const dd_snapshot *current_snap = NULL;
+    if (chunk.type == DD_CHUNK_SNAP) {
+      current_snap = (const dd_snapshot *)chunk.data;
+    } else if (chunk.type == DD_CHUNK_SNAP_DELTA) {
+      int unpacked_size = demo_r_unpack_delta(dr, chunk.data, unpacked_snap);
+      if (unpacked_size > 0) {
+        current_snap = (const dd_snapshot *)unpacked_snap;
+      }
+    }
+
+    if (chunk.type == DD_CHUNK_SNAP || chunk.type == DD_CHUNK_SNAP_DELTA || chunk.type == DD_CHUNK_TICK_MARKER) {
+      if (last_written_tick == -1) {
+        last_written_tick = chunk.tick - 1;
+      }
+      while (last_written_tick < chunk.tick) {
+        last_written_tick++;
+        dd_demo_phys_advance_to(&dr->phys, last_written_tick, &dr->tuning, &dr->map);
+        dr->current_tick = last_written_tick;
+        int snap_size = demo_r_get_phys_snap(dr, phys_snap);
+        demo_w_write_snap(dw, last_written_tick, phys_snap, snap_size);
+      }
+      
+      if (current_snap) {
+        dd_demo_phys_update(&dr->phys, current_snap, chunk.tick, &dr->tuning, &dr->map);
+      }
+    } else if (chunk.type == DD_CHUNK_MSG) {
+      demo_w_write_msg(dw, chunk.data, chunk.size);
+    }
+  }
+
+  dr->track_phys = original_track_phys;
+  return true;
 }
 
 #endif /* DDNET_DEMO_IMPLEMENTATION */
