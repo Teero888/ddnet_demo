@@ -38,7 +38,6 @@ extern "C" {
 #define DD_SNAPSHOT_MAX_ITEMS 65536
 #define DD_SNAPSHOT_MAX_PARTS 64
 #define DD_SNAPSHOT_MAX_SIZE (DD_SNAPSHOT_MAX_PARTS * 1024)
-#define DD_PI (3.1415926535897932384626433f)
 
 /* Demo chunk types that can be returned by the reader */
 enum {
@@ -2481,14 +2480,14 @@ void dd_phys_init_tuning(dd_phys_tuning *tuning) {
 }
 
 void dd_phys_core_read(dd_phys_core *core, const dd_netobj_character_core *net_core) {
-  core->pos.x = net_core->m_X;
-  core->pos.y = net_core->m_Y;
-  core->vel.x = net_core->m_VelX / 256.0f;
-  core->vel.y = net_core->m_VelY / 256.0f;
-  core->hook_pos.x = net_core->m_HookX;
-  core->hook_pos.y = net_core->m_HookY;
-  core->hook_dir.x = net_core->m_HookDx / 256.0f;
-  core->hook_dir.y = net_core->m_HookDy / 256.0f;
+  core->pos.x = (float)net_core->m_X;
+  core->pos.y = (float)net_core->m_Y;
+  core->vel.x = (float)net_core->m_VelX / 256.0f;
+  core->vel.y = (float)net_core->m_VelY / 256.0f;
+  core->hook_pos.x = (float)net_core->m_HookX;
+  core->hook_pos.y = (float)net_core->m_HookY;
+  core->hook_dir.x = (float)net_core->m_HookDx / 256.0f;
+  core->hook_dir.y = (float)net_core->m_HookDy / 256.0f;
   core->hook_tick = net_core->m_HookTick;
   core->hook_state = net_core->m_HookState;
   core->hooked_player = net_core->m_HookedPlayer;
@@ -2709,11 +2708,31 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
     float tx = core->input.m_TargetX;
     float ty = core->input.m_TargetY;
     float tmp_angle = atan2f(ty, tx);
-    
-    if (tmp_angle < -(DD_PI / 2.0f))
-      core->angle = (int)((tmp_angle + (2.0f * DD_PI)) * 256.0f);
+    if (tmp_angle < -(3.14159265358979323846f / 2.0f))
+      core->angle = (int)((tmp_angle + (2.0f * 3.14159265358979323846f)) * 256.0f);
     else
       core->angle = (int)(tmp_angle * 256.0f);
+
+    if (core->input.m_Hook) {
+      if (core->hook_state == DD_HOOK_IDLE) {
+        float len = sqrtf(tx * tx + ty * ty);
+        dd_vec2 target_dir = {0, 0};
+        if (len > 0.0001f) {
+          target_dir.x = tx / len;
+          target_dir.y = ty / len;
+        }
+        core->hook_state = DD_HOOK_FLYING;
+        core->hook_pos.x = core->pos.x + target_dir.x * 28.0f * 1.5f;
+        core->hook_pos.y = core->pos.y + target_dir.y * 28.0f * 1.5f;
+        core->hook_dir = target_dir;
+        core->hooked_player = -1;
+        core->hook_tick = 50.0f * (1.25f - tuning->hook_duration);
+      }
+    } else {
+      core->hooked_player = -1;
+      core->hook_state = DD_HOOK_IDLE;
+      core->hook_pos = core->pos;
+    }
 
     if (core->input.m_Jump) {
       if (!(core->jumped & 1)) {
@@ -2734,23 +2753,6 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
     } else {
       core->jumped &= ~1;
     }
-
-    if (core->input.m_Hook) {
-      if (core->hook_state == DD_HOOK_IDLE) {
-        dd_vec2 target_dir = dd_normalize((dd_vec2){tx, ty});
-        core->hook_state = DD_HOOK_FLYING;
-        core->hook_pos.x = core->pos.x + target_dir.x * 28.0f * 1.5f;
-        core->hook_pos.y = core->pos.y + target_dir.y * 28.0f * 1.5f;
-        core->hook_dir = target_dir;
-        core->hooked_player = -1;
-        core->hook_tick = 50.0f * (1.25f - tuning->hook_duration);
-      }
-    } else {
-      core->hooked_player = -1;
-      core->hook_state = DD_HOOK_IDLE;
-      core->hook_pos = core->pos;
-    }
-
   }
 
   if (grounded) {
@@ -2765,6 +2767,21 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
   else
     core->vel.x *= friction;
 
+  // Jump visual states
+  if (core->jumps == -1) {
+    core->jumped |= 2;
+  } else if (core->jumps == 0) {
+    core->jumped |= 2;
+  } else if (core->jumps == 1 && core->jumped > 0) {
+    core->jumped |= 2;
+  } else if (core->jumped_total < core->jumps - 1 && core->jumped > 1) {
+    core->jumped = 1;
+  }
+
+  if (core->endless_jump && core->jumped > 1) {
+    core->jumped = 1;
+  }
+
   // Hook logic
   if (core->hook_state == DD_HOOK_IDLE) {
     core->hooked_player = -1;
@@ -2774,46 +2791,31 @@ void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
   } else if (core->hook_state == DD_HOOK_RETRACT_END) {
     core->hook_state = DD_HOOK_RETRACTED;
   } else if (core->hook_state == DD_HOOK_FLYING) {
-
-    dd_vec2 hook_base = core->pos;
-    if(core->new_hook)
-      hook_base = core->hook_tele_base;
-    dd_vec2 new_pos = {core->hook_pos.x + core->hook_dir.x * tuning->hook_fire_speed,
+    dd_vec2 new_hook_pos = {core->hook_pos.x + core->hook_dir.x * tuning->hook_fire_speed,
                             core->hook_pos.y + core->hook_dir.y * tuning->hook_fire_speed};
-    if (dd_distance(hook_base, new_pos) > tuning->hook_length) {
+    if (dd_distance(core->pos, new_hook_pos) > tuning->hook_length) {
       core->hook_state = DD_HOOK_RETRACT_START;
-      dd_vec2 temp_dir = dd_normalize((dd_vec2){new_pos.x - hook_base.x, new_pos.y - hook_base.y});
-      new_pos.x = hook_base.x + temp_dir.x * tuning->hook_length;
-      new_pos.y = hook_base.y + temp_dir.y * tuning->hook_length;
+      dd_vec2 temp_dir = dd_normalize((dd_vec2){new_hook_pos.x - core->pos.x, new_hook_pos.y - core->pos.y});
+      new_hook_pos.x = core->pos.x + temp_dir.x * tuning->hook_length;
+      new_hook_pos.y = core->pos.y + temp_dir.y * tuning->hook_length;
     }
 
-    int hit = dd_col_intersect_line_tele_hook(map, core->hook_pos, new_pos, &new_pos, NULL);
-    bool hit_ground = false;
-		bool retract = false;
-		bool through_tele = false;
+    int hit = dd_col_intersect_line_tele_hook(map, core->hook_pos, new_hook_pos, &new_hook_pos, NULL);
     if (hit) {
-			if(hit == TILE_NOHOOK)
-				retract = true;
-			else if(hit == TILE_TELEINHOOK)
-				through_tele = true;
-			else
-				hit_ground = true;
-    }
-    if(core->hook_state == DD_HOOK_FLYING)
-    {
-      if(hit_ground)
-        core->hook_state = DD_HOOK_GRABBED;
-      else if(retract)
+      if (hit == TILE_NOHOOK) {
         core->hook_state = DD_HOOK_RETRACT_START;
-      core->hook_pos = new_pos;
+      } else {
+        core->hook_state = DD_HOOK_GRABBED;
+      }
     }
+    core->hook_pos = new_hook_pos;
   }
 
   if (core->hook_state == DD_HOOK_GRABBED) {
     if (core->hooked_player == -1) {
+      dd_vec2 dir = dd_normalize((dd_vec2){core->hook_pos.x - core->pos.x, core->hook_pos.y - core->pos.y});
       float distance = dd_distance(core->pos, core->hook_pos);
       if (distance > 46.0f) {
-        dd_vec2 dir = dd_normalize((dd_vec2){core->hook_pos.x - core->pos.x, core->hook_pos.y - core->pos.y});
         dd_vec2 hook_vel = {
           dir.x * tuning->hook_drag_accel,
           dir.y * tuning->hook_drag_accel
@@ -2868,14 +2870,9 @@ void dd_phys_move(dd_phys_core *core, const dd_phys_tuning *tuning, const map_da
   core->vel.x *= ramp_value;
 
   dd_vec2 elasticity = {0, 0};
-  bool grounded = 0;
-  dd_col_move_box(map, &core->pos, &core->vel, (dd_vec2){28.0f, 28.0f}, elasticity, &grounded);
-  if (grounded) {
-    core->jumped &= ~2;
-    core->jumped_total = 0;
-  }
+  dd_col_move_box(map, &core->pos, &core->vel, (dd_vec2){28.0f, 28.0f}, elasticity, NULL);
 
-  core->vel.x *= 1.0f / ramp_value;
+  core->vel.x /= ramp_value;
 }
 
 void dd_phys_quantize(dd_phys_core *core) {
@@ -2925,6 +2922,36 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
           state->players[id].has_ddnet_char = true;
         } else {
           state->players[id].has_ddnet_char = false;
+        }
+
+        // Reconstruct inputs from character core
+        state->players[id].input.m_Direction = net_core->m_Direction;
+        state->players[id].input.m_Hook = net_core->m_HookState != 0;
+
+        float angle_rad = net_core->m_Angle / 256.0f;
+        state->players[id].input.m_TargetX = (int)(cosf(angle_rad) * 100.0f);
+        state->players[id].input.m_TargetY = (int)(sinf(angle_rad) * 100.0f);
+
+        // Weapon and flags reconstruction
+        state->players[id].weapon = char_obj->m_Weapon;
+        state->players[id].player_flags = char_obj->m_PlayerFlags;
+        state->players[id].health = char_obj->m_Health;
+        state->players[id].armor = char_obj->m_Armor;
+        state->players[id].ammo_count = char_obj->m_AmmoCount;
+        state->players[id].emote = char_obj->m_Emote;
+        state->players[id].attack_tick = char_obj->m_AttackTick;
+
+        state->players[id].input.m_WantedWeapon = char_obj->m_Weapon;
+
+        // Jump reconstruction
+        if (state->last_base_tick[id] != -1) {
+          if (net_core->m_Jumped != old_jumped && net_core->m_Jumped > 0) {
+            state->players[id].input.m_Jump = 1;
+          } else {
+            state->players[id].input.m_Jump = 0;
+          }
+        } else {
+          state->players[id].input.m_Jump = 0;
         }
 
         state->last_base_tick[id] = base_tick;
