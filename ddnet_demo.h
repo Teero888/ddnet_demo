@@ -29,7 +29,7 @@ extern "C" {
 
 #define DD_SERVER_TICK_SPEED 50
 #define DD_MAX_TIMELINE_MARKERS 64
-#define DD_MAX_NETOBJSIZES 32768
+#define DD_MAX_NETOBJSIZES 64
 #define DD_NET_MAX_PACKETSIZE 1400
 #define DD_NET_MAX_PAYLOAD (DD_NET_MAX_PACKETSIZE - 6)
 #define DD_MAX_MESSAGE_SIZE 1024
@@ -123,7 +123,7 @@ const dd_snap_item *dd_snap_find_item(const dd_snapshot *snap, int type, int id)
  ******************************************************************************/
 
 #define DD_GAMEINFO_CURVERSION 10
-#define OFFSET_UUID 0x4000
+#define OFFSET_UUID 256
 
 /* Vanilla Object and Event types */
 enum {
@@ -986,20 +986,9 @@ void dd_phys_quantize(dd_phys_core *core);
 typedef struct {
   dd_phys_core players[64];
   int last_base_tick[64];
-  dd_phys_core prev_players[64];
-  int prev_base_tick[64];
   bool active[64];
   int current_tick;
 } dd_demo_phys_state;
-
-typedef struct {
-  dd_vec2 pos;
-  dd_vec2 vel;
-  dd_vec2 hook_pos;
-  dd_vec2 hook_dir;
-} dd_demo_render_state;
-
-dd_demo_render_state dd_demo_phys_interpolate(const dd_demo_phys_state *state, int id, int render_tick, float intra_tick);
 
 void dd_phys_tick(dd_phys_core *core, const dd_phys_tuning *tuning, const map_data_t *map, dd_demo_phys_state *world, bool use_input);
 
@@ -1592,7 +1581,6 @@ void demo_sb_clear(dd_snapshot_builder *sb) {
 }
 
 void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
-  if (size < 0) return NULL;
   if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + size > DD_SNAPSHOT_MAX_SIZE) {
     return NULL;
   }
@@ -1634,10 +1622,6 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
     final_type = DD_SNAPSHOT_MAX_TYPE - extended_index;
   }
 
-  if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + size > DD_SNAPSHOT_MAX_SIZE) {
-    return NULL;
-  }
-
   dd_snap_item *obj = (dd_snap_item *)(sb->data + sb->data_size);
   obj->type_and_id = (final_type << 16) | id;
   sb->offsets[sb->num_items] = sb->data_size;
@@ -1657,47 +1641,8 @@ int demo_sb_finish(dd_snapshot_builder *sb, void *snap_data) {
   size_t total_size = sizeof(dd_snapshot) + sizeof(int) * sb->num_items + sb->data_size;
   if (total_size > DD_SNAPSHOT_MAX_SIZE) return -1;
 
-  // Compute original item sizes before sorting
-  int item_sizes[DD_SNAPSHOT_MAX_ITEMS];
-  for (int i = 0; i < sb->num_items; i++) {
-    if (i == sb->num_items - 1) {
-      item_sizes[i] = sb->data_size - sb->offsets[i];
-    } else {
-      item_sizes[i] = sb->offsets[i + 1] - sb->offsets[i];
-    }
-  }
-
-  // Create an array of indices and sort it by type_and_id
-  int indices[DD_SNAPSHOT_MAX_ITEMS];
-  for (int i = 0; i < sb->num_items; i++) indices[i] = i;
-
-  for (int gap = sb->num_items / 2; gap > 0; gap /= 2) {
-    for (int i = gap; i < sb->num_items; i++) {
-      int temp_idx = indices[i];
-      int temp_key = ((dd_snap_item *)(sb->data + sb->offsets[temp_idx]))->type_and_id;
-      int j;
-      for (j = i; j >= gap; j -= gap) {
-        int key_j = ((dd_snap_item *)(sb->data + sb->offsets[indices[j - gap]]))->type_and_id;
-        if (key_j <= temp_key) break;
-        indices[j] = indices[j - gap];
-      }
-      indices[j] = temp_idx;
-    }
-  }
-
-  // Write sorted items sequentially into the final snapshot data buffer
-  int *out_offsets = dd_snap_offsets(snap);
-  uint8_t *out_data = (uint8_t *)dd_snap_data_start(snap);
-  int current_offset = 0;
-
-  for (int i = 0; i < sb->num_items; i++) {
-    int idx = indices[i];
-    int size = item_sizes[idx];
-
-    out_offsets[i] = current_offset;
-    memcpy(out_data + current_offset, sb->data + sb->offsets[idx], size);
-    current_offset += size;
-  }
+  memcpy(dd_snap_offsets(snap), sb->offsets, sizeof(int) * sb->num_items);
+  memcpy(dd_snap_data_start(snap), sb->data, sb->data_size);
 
   return (int)total_size;
 }
@@ -1995,64 +1940,7 @@ dd_demo_reader *demo_r_create(void) {
   if (!dr) return NULL;
   dd_huffman_init(&dr->huffman);
   dd_reader_init_netobj_sizes(dr);
-  for (int i = 0; i < 64; i++) {
-    dr->phys.last_base_tick[i] = -1;
-    dr->phys.prev_base_tick[i] = -1;
-  }
-  dr->phys.current_tick = -1;
   return dr;
-}
-
-dd_demo_render_state dd_demo_phys_interpolate(const dd_demo_phys_state *state, int id, int render_tick, float intra_tick) {
-  dd_demo_render_state out = {0};
-  if (id < 0 || id >= 64 || state->last_base_tick[id] == -1) return out;
-
-  const dd_phys_core *p_cur = &state->players[id];
-  
-  if (state->prev_base_tick[id] == -1 || state->prev_base_tick[id] >= state->last_base_tick[id]) {
-    out.pos = p_cur->pos;
-    out.vel = p_cur->vel;
-    out.hook_pos = p_cur->hook_pos;
-    out.hook_dir = p_cur->hook_dir;
-    return out;
-  }
-
-  const dd_phys_core *p_prev = &state->prev_players[id];
-  
-  float t0 = (float)state->prev_base_tick[id];
-  float t1 = (float)state->last_base_tick[id];
-  float t = (float)render_tick + intra_tick;
-  
-  if (t >= t1) {
-    out.pos = p_cur->pos;
-    out.vel = p_cur->vel;
-    out.hook_pos = p_cur->hook_pos;
-    out.hook_dir = p_cur->hook_dir;
-    return out;
-  }
-  if (t <= t0) {
-    out.pos = p_prev->pos;
-    out.vel = p_prev->vel;
-    out.hook_pos = p_prev->hook_pos;
-    out.hook_dir = p_prev->hook_dir;
-    return out;
-  }
-
-  float frac = (t - t0) / (t1 - t0);
-  
-  out.pos.x = p_prev->pos.x + (p_cur->pos.x - p_prev->pos.x) * frac;
-  out.pos.y = p_prev->pos.y + (p_cur->pos.y - p_prev->pos.y) * frac;
-  
-  out.vel.x = p_prev->vel.x + (p_cur->vel.x - p_prev->vel.x) * frac;
-  out.vel.y = p_prev->vel.y + (p_cur->vel.y - p_prev->vel.y) * frac;
-  
-  out.hook_pos.x = p_prev->hook_pos.x + (p_cur->hook_pos.x - p_prev->hook_pos.x) * frac;
-  out.hook_pos.y = p_prev->hook_pos.y + (p_cur->hook_pos.y - p_prev->hook_pos.y) * frac;
-  
-  out.hook_dir.x = p_prev->hook_dir.x + (p_cur->hook_dir.x - p_prev->hook_dir.x) * frac;
-  out.hook_dir.y = p_prev->hook_dir.y + (p_cur->hook_dir.y - p_prev->hook_dir.y) * frac;
-  
-  return out;
 }
 
 void demo_r_destroy(dd_demo_reader **dr_ptr) {
@@ -2250,6 +2138,9 @@ bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk) {
       chunk->size = 0;
       chunk->data = NULL;
 
+      if (dr->track_phys) {
+        dd_demo_phys_advance_to(&dr->phys, dr->current_tick, &dr->tuning, &dr->map);
+      }
       return true;
     }
 
@@ -2414,17 +2305,6 @@ static void dd_init_netobj_sizes(short *item_sizes) {
   item_sizes[DD_NETEVENTTYPE_SOUNDGLOBAL] = sizeof(dd_netevent_sound_global);
   item_sizes[DD_NETEVENTTYPE_SOUNDWORLD] = sizeof(dd_netevent_sound_world);
   item_sizes[DD_NETEVENTTYPE_DAMAGEIND] = sizeof(dd_netevent_damage_ind);
-  item_sizes[DD_NETOBJTYPE_DDNETCHARACTER] = sizeof(dd_netobj_ddnet_character);
-  item_sizes[DD_NETOBJTYPE_DDNETPLAYER] = sizeof(dd_netobj_ddnet_player);
-  item_sizes[DD_NETOBJTYPE_GAMEINFOEX] = sizeof(dd_netobj_game_info_ex);
-  item_sizes[DD_NETOBJTYPE_DDRACEPROJECTILE] = sizeof(dd_netobj_ddrace_projectile);
-  item_sizes[DD_NETOBJTYPE_DDNETLASER] = sizeof(dd_netobj_ddnet_laser);
-  item_sizes[DD_NETOBJTYPE_DDNETPROJECTILE] = sizeof(dd_netobj_ddnet_projectile);
-  item_sizes[DD_NETOBJTYPE_DDNETPICKUP] = sizeof(dd_netobj_ddnet_pickup);
-  item_sizes[DD_NETOBJTYPE_DDNETSPECTATORINFO] = sizeof(dd_netobj_ddnet_spectator_info);
-  item_sizes[DD_NETOBJTYPE_SPECCHAR] = sizeof(dd_netobj_spec_char);
-  item_sizes[DD_NETOBJTYPE_SWITCHSTATE] = sizeof(dd_netobj_switch_state);
-  item_sizes[DD_NETOBJTYPE_ENTITYEX] = sizeof(dd_netobj_entity_ex);
 }
 
 static void dd_writer_init_netobj_sizes(dd_demo_writer *dw) { dd_init_netobj_sizes(dw->item_sizes); }
@@ -2612,8 +2492,7 @@ void dd_phys_core_read(dd_phys_core *core, const dd_netobj_character_core *net_c
   core->hook_tick = net_core->m_HookTick;
   core->hook_state = net_core->m_HookState;
   core->hooked_player = net_core->m_HookedPlayer;
-  core->jumped = net_core->m_Jumped & 3;
-  core->jumps = net_core->m_Jumped >> 2;
+  core->jumped = net_core->m_Jumped;
   core->direction = net_core->m_Direction;
   core->angle = net_core->m_Angle;
 }
@@ -2631,7 +2510,6 @@ void dd_phys_core_read_ddnet(dd_phys_core *core, const dd_netobj_ddnet_character
   core->laser_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_LASER_HIT_DISABLED) != 0;
   core->hook_hit_disabled = (net_ddnet->m_Flags & DD_CHARACTERFLAG_HOOK_HIT_DISABLED) != 0;
   core->invincible = (net_ddnet->m_Flags & DD_CHARACTERFLAG_INVINCIBLE) != 0;
-  core->jumps = net_ddnet->m_Jumps;
 }
 
 void dd_phys_core_write(const dd_phys_core *core, dd_netobj_character_core *net_core) {
@@ -2646,7 +2524,7 @@ void dd_phys_core_write(const dd_phys_core *core, dd_netobj_character_core *net_
   net_core->m_HookTick = core->hook_tick;
   net_core->m_HookState = core->hook_state;
   net_core->m_HookedPlayer = core->hooked_player;
-  net_core->m_Jumped = (core->jumped & 3) | (core->jumps << 2);
+  net_core->m_Jumped = core->jumped;
   net_core->m_Direction = core->direction;
   net_core->m_Angle = core->angle;
 }
@@ -3008,10 +2886,7 @@ void dd_phys_quantize(dd_phys_core *core) {
 
 void dd_demo_phys_init(dd_demo_phys_state *state) {
   memset(state, 0, sizeof(*state));
-  for (int i = 0; i < 64; i++) {
-    state->last_base_tick[i] = -1;
-    state->prev_base_tick[i] = -1;
-  }
+  for (int i = 0; i < 64; i++) state->last_base_tick[i] = -1;
   state->current_tick = -1;
 }
 
@@ -3023,9 +2898,6 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
     const dd_snap_item *item = dd_snap_get_item(snap, i);
     int type = dd_snap_item_type(item);
     int id = dd_snap_item_id(item);
-    if (type == DD_NETOBJTYPE_CHARACTER) {
-      printf("dd_demo_phys_update found char id %d at tick %d\n", id, tick);
-    }
     if (type == DD_NETOBJTYPE_CHARACTER && id >= 0 && id < 64) {
       in_snap[id] = true;
       const dd_netobj_character *char_obj = (const dd_netobj_character *)dd_snap_item_data(item);
@@ -3034,25 +2906,13 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
       const dd_snap_item *ex_item = dd_snap_find_item(snap, DD_NETOBJTYPE_DDNETCHARACTER, id);
       const dd_netobj_ddnet_character *net_ddnet = ex_item ? (const dd_netobj_ddnet_character *)dd_snap_item_data(ex_item) : NULL;
 
-      // For demos, the snapshot itself represents the state at 'tick'.
-      // net_core->m_Tick is just the client input tick the server processed,
-      // which is in the past. We must not latency-predict it in demos!
-      int base_tick = tick;
+      int base_tick = net_core->m_Tick;
+      if (base_tick <= 0) base_tick = tick;
 
       if (state->last_base_tick[id] <= base_tick || state->last_base_tick[id] == -1) {
-        state->prev_players[id] = state->players[id];
-        state->prev_base_tick[id] = state->last_base_tick[id];
-
         int old_jumped = state->players[id].jumped;
 
         dd_phys_core_read(&state->players[id], net_core);
-        state->players[id].weapon = char_obj->m_Weapon;
-        state->players[id].player_flags = char_obj->m_PlayerFlags;
-        state->players[id].health = char_obj->m_Health;
-        state->players[id].armor = char_obj->m_Armor;
-        state->players[id].ammo_count = char_obj->m_AmmoCount;
-        state->players[id].emote = char_obj->m_Emote;
-        state->players[id].attack_tick = char_obj->m_AttackTick;
         if (net_ddnet) {
           dd_phys_core_read_ddnet(&state->players[id], net_ddnet);
           state->players[id].ddnet_flags = net_ddnet->m_Flags;
@@ -3065,17 +2925,6 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
           state->players[id].has_ddnet_char = true;
         } else {
           state->players[id].has_ddnet_char = false;
-        }
-
-        memset(&state->players[id].input, 0, sizeof(state->players[id].input));
-        state->players[id].input.m_Direction = state->players[id].direction;
-        state->players[id].input.m_Hook = (state->players[id].hook_state != DD_HOOK_IDLE);
-        if (net_ddnet && (net_ddnet->m_TargetX != 0 || net_ddnet->m_TargetY != 0)) {
-          state->players[id].input.m_TargetX = net_ddnet->m_TargetX;
-          state->players[id].input.m_TargetY = net_ddnet->m_TargetY;
-        } else {
-          state->players[id].input.m_TargetX = (int)(cosf(state->players[id].angle / 256.0f) * 256.0f);
-          state->players[id].input.m_TargetY = (int)(sinf(state->players[id].angle / 256.0f) * 256.0f);
         }
 
         state->last_base_tick[id] = base_tick;
@@ -3097,10 +2946,7 @@ void dd_demo_phys_update(dd_demo_phys_state *state, const dd_snapshot *snap, int
   for (int id = 0; id < 64; id++) {
     if (state->last_base_tick[id] != -1) {
       while (state->last_base_tick[id] < tick) {
-        bool frozen = (state->players[id].freeze_end == -1) || (state->players[id].freeze_end > state->last_base_tick[id] + 1);
-        if (!frozen) {
-          dd_phys_tick(&state->players[id], tuning, map, NULL, true);
-        }
+        dd_phys_tick(&state->players[id], tuning, map, NULL, true);
         state->last_base_tick[id]++;
       }
       if (!in_snap[id]) {
@@ -3118,10 +2964,7 @@ void dd_demo_phys_advance_to(dd_demo_phys_state *state, int tick, const dd_phys_
     state->current_tick++;
     for (int id = 0; id < 64; id++) {
       if (state->last_base_tick[id] != -1) {
-        bool frozen = (state->players[id].freeze_end == -1) || (state->players[id].freeze_end > state->current_tick);
-        if (!frozen) {
-          dd_phys_tick(&state->players[id], tuning, map, NULL, true);
-        }
+        dd_phys_tick(&state->players[id], tuning, map, NULL, true);
         state->last_base_tick[id]++;
       }
     }
@@ -3137,8 +2980,6 @@ bool demo_r_preprocess_dead_reckoning(dd_demo_reader *dr, dd_demo_writer *dw) {
   bool original_track_phys = dr->track_phys;
   dr->track_phys = false;
 
-  int current_processing_tick = -1;
-
   while (demo_r_next_chunk(dr, &chunk)) {
     const dd_snapshot *current_snap = NULL;
     if (chunk.type == DD_CHUNK_SNAP) {
@@ -3150,14 +2991,11 @@ bool demo_r_preprocess_dead_reckoning(dd_demo_reader *dr, dd_demo_writer *dw) {
       }
     }
 
-    if (current_processing_tick == -1) {
-      current_processing_tick = chunk.tick;
-      last_written_tick = chunk.tick - 1;
-    }
-
-    // If we've moved to a new tick, flush all snapshots up to the new tick - 1
-    if (chunk.tick > current_processing_tick) {
-      while (last_written_tick < current_processing_tick) {
+    if (chunk.type == DD_CHUNK_SNAP || chunk.type == DD_CHUNK_SNAP_DELTA || chunk.type == DD_CHUNK_TICK_MARKER) {
+      if (last_written_tick == -1) {
+        last_written_tick = chunk.tick - 1;
+      }
+      while (last_written_tick < chunk.tick) {
         last_written_tick++;
         dd_demo_phys_advance_to(&dr->phys, last_written_tick, &dr->tuning, &dr->map);
         dr->current_tick = last_written_tick;
@@ -3165,33 +3003,12 @@ bool demo_r_preprocess_dead_reckoning(dd_demo_reader *dr, dd_demo_writer *dw) {
         demo_w_write_snap(dw, last_written_tick, phys_snap, snap_size);
       }
       
-      // Advance to the skipped ticks
-      while (last_written_tick < chunk.tick - 1) {
-        last_written_tick++;
-        dd_demo_phys_advance_to(&dr->phys, last_written_tick, &dr->tuning, &dr->map);
-        dr->current_tick = last_written_tick;
-        int snap_size = demo_r_get_phys_snap(dr, phys_snap);
-        demo_w_write_snap(dw, last_written_tick, phys_snap, snap_size);
-      }
-      current_processing_tick = chunk.tick;
-    }
-
-    if (chunk.type == DD_CHUNK_SNAP || chunk.type == DD_CHUNK_SNAP_DELTA || chunk.type == DD_CHUNK_TICK_MARKER) {
       if (current_snap) {
         dd_demo_phys_update(&dr->phys, current_snap, chunk.tick, &dr->tuning, &dr->map);
       }
     } else if (chunk.type == DD_CHUNK_MSG) {
       demo_w_write_msg(dw, chunk.data, chunk.size);
     }
-  }
-
-  // Flush the final tick
-  if (current_processing_tick != -1 && last_written_tick < current_processing_tick) {
-    last_written_tick++;
-    dd_demo_phys_advance_to(&dr->phys, last_written_tick, &dr->tuning, &dr->map);
-    dr->current_tick = last_written_tick;
-    int snap_size = demo_r_get_phys_snap(dr, phys_snap);
-    demo_w_write_snap(dw, last_written_tick, phys_snap, snap_size);
   }
 
   dr->track_phys = original_track_phys;
