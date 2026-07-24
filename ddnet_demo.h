@@ -474,7 +474,7 @@ enum {
   DD_GAMEINFOFLAG_ENTITIES_FNG = 1 << 28,
   DD_GAMEINFOFLAG_ENTITIES_VANILLA = 1 << 29,
   DD_GAMEINFOFLAG_DONT_MASK_ENTITIES = 1 << 30,
-  DD_GAMEINFOFLAG_ENTITIES_BW = 1 << 31,
+  DD_GAMEINFOFLAG_ENTITIES_BW = 1 << 31, // ISO C restricts enumerator values to range of ‘int’ before C23 so i can't really resolve this warning without changing the enum type to unsigned int
 };
 enum {
   DD_GAMEINFOFLAG2_ALLOW_X_SKINS = 1 << 0,
