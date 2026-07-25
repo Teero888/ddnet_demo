@@ -921,6 +921,8 @@ bool demo_w_write_msg_sv_vote_set(dd_demo_writer *dw, int timeout, const char *d
 bool demo_w_write_msg_sv_vote_status(dd_demo_writer *dw, int yes, int no, int pass, int total);
 bool demo_w_write_msg_sv_ddrace_time_legacy(dd_demo_writer *dw, int time, int check, int finish);
 bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int server_time_best, int player_time_best);
+bool demo_w_write_msg_sv_racefinish(dd_demo_writer *dw, int client_id, int time, int diff, int record_server, int record_personal);
+bool demo_w_write_msg_sv_record(dd_demo_writer *dw, int server_time_best, int player_time_best);
 
 #ifdef __cplusplus
 }
@@ -2123,6 +2125,31 @@ bool demo_w_write_msg_sv_record_legacy(dd_demo_writer *dw, int server_time_best,
   dd_msg_packer packer;
   demo_msg_init(&packer, buffer, sizeof(buffer));
   demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_RECORDLEGACY << 1);
+  demo_msg_add_int(&packer, server_time_best);
+  demo_msg_add_int(&packer, player_time_best);
+  int size = demo_msg_finish(&packer);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
+}
+
+bool demo_w_write_msg_sv_racefinish(dd_demo_writer *dw, int client_id, int time, int diff, int record_server, int record_personal) {
+  char buffer[DD_MAX_MESSAGE_SIZE];
+  dd_msg_packer packer;
+  demo_msg_init(&packer, buffer, sizeof(buffer));
+  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_RACEFINISH << 1);
+  demo_msg_add_int(&packer, client_id);
+  demo_msg_add_int(&packer, time);
+  demo_msg_add_int(&packer, diff);
+  demo_msg_add_int(&packer, record_server);
+  demo_msg_add_int(&packer, record_personal);
+  int size = demo_msg_finish(&packer);
+  return (size >= 0) && demo_w_write_msg(dw, buffer, size);
+}
+
+bool demo_w_write_msg_sv_record(dd_demo_writer *dw, int server_time_best, int player_time_best) {
+  char buffer[DD_MAX_MESSAGE_SIZE];
+  dd_msg_packer packer;
+  demo_msg_init(&packer, buffer, sizeof(buffer));
+  demo_msg_add_int(&packer, DD_NETMSGTYPE_SV_RECORD << 1);
   demo_msg_add_int(&packer, server_time_best);
   demo_msg_add_int(&packer, player_time_best);
   int size = demo_msg_finish(&packer);
