@@ -56,6 +56,7 @@ typedef struct {
   char map_name[64];
   uint8_t map_size[4];
   uint8_t map_crc[4];
+  // This has to be either "client" or "server" to be compatible with a strict demo reader.
   char type[8];
   uint8_t length[4];
   char timestamp[20];
