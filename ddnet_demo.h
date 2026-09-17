@@ -1101,6 +1101,13 @@ static bool dd_uuid_get(int type_id, uint8_t uuid_out[16]) {
   return false;
 }
 
+static inline int dd_uuid_get_index(int type_id) {
+  for (size_t i = 0; i < sizeof(g_dd_uuids) / sizeof(g_dd_uuids[0]); ++i) {
+    if (g_dd_uuids[i].type_id == type_id) return (int)i;
+  }
+  return -1;
+}
+
 /******************************************************************************
  *
  * COMPRESSION IMPLEMENTATION (VariableInt + Huffman)
@@ -1403,27 +1410,35 @@ struct dd_snapshot_builder {
   int offsets[DD_SNAPSHOT_MAX_ITEMS];
   int num_items;
 
-  int extended_item_types[MAX_EXTENDED_ITEM_TYPES];
-  int num_extended_item_types;
+  bool type_emitted[MAX_EXTENDED_ITEM_TYPES];
+  int dynamic_extended_types[MAX_EXTENDED_ITEM_TYPES];
+  int num_dynamic_extended_types;
 };
 
-static int demo_sb_get_extended_item_type_index(dd_snapshot_builder *sb, int type_id, bool *is_new) {
-  *is_new = false;
-  for (int i = 0; i < sb->num_extended_item_types; i++) {
-    if (sb->extended_item_types[i] == type_id) return i;
+static int demo_sb_get_extended_item_type_index(dd_snapshot_builder *sb, int type_id) {
+  int idx = dd_uuid_get_index(type_id);
+  if (idx >= 0) return idx;
+
+  const int base_idx = (int)(sizeof(g_dd_uuids) / sizeof(g_dd_uuids[0]));
+  for (int i = 0; i < sb->num_dynamic_extended_types; i++) {
+    if (sb->dynamic_extended_types[i] == type_id) {
+      return base_idx + i;
+    }
   }
 
-  if (sb->num_extended_item_types >= MAX_EXTENDED_ITEM_TYPES) return -1;
+  if (base_idx + sb->num_dynamic_extended_types >= MAX_EXTENDED_ITEM_TYPES) return -1;
 
-  int index = sb->num_extended_item_types++;
-  sb->extended_item_types[index] = type_id;
-  *is_new = true;
-  return index;
+  int dyn_idx = sb->num_dynamic_extended_types++;
+  sb->dynamic_extended_types[dyn_idx] = type_id;
+  return base_idx + dyn_idx;
 }
 
 dd_snapshot_builder *demo_sb_create(void) {
   dd_snapshot_builder *sb = (dd_snapshot_builder *)malloc(sizeof(dd_snapshot_builder));
-  if (sb) demo_sb_clear(sb);
+  if (sb) {
+    sb->num_dynamic_extended_types = 0;
+    demo_sb_clear(sb);
+  }
   return sb;
 }
 
@@ -1437,26 +1452,29 @@ void demo_sb_destroy(dd_snapshot_builder **sb_ptr) {
 void demo_sb_clear(dd_snapshot_builder *sb) {
   sb->data_size = 0;
   sb->num_items = 0;
-  sb->num_extended_item_types = 0;
+  memset(sb->type_emitted, 0, sizeof(sb->type_emitted));
 }
 
 void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
-  if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + size > DD_SNAPSHOT_MAX_SIZE) {
+  if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS) {
+    return NULL;
+  }
+  size_t current_total = sizeof(dd_snapshot) + sizeof(int) * (size_t)sb->num_items + (size_t)sb->data_size;
+  if (current_total + sizeof(int) + sizeof(dd_snap_item) + (size_t)size > DD_SNAPSHOT_MAX_SIZE) {
     return NULL;
   }
 
   int final_type = type;
 
   if (type >= OFFSET_UUID && type < DD_SNAPSHOT_MAX_TYPE - MAX_EXTENDED_ITEM_TYPES) {
-    bool is_new = false;
-    int extended_index = demo_sb_get_extended_item_type_index(sb, type, &is_new);
-    if (extended_index == -1) {
+    int extended_index = demo_sb_get_extended_item_type_index(sb, type);
+    if (extended_index < 0 || extended_index >= MAX_EXTENDED_ITEM_TYPES) {
       return NULL;
     }
 
-    if (is_new) {
-      if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS || sb->data_size + (int)sizeof(dd_snap_item) + 16 > DD_SNAPSHOT_MAX_SIZE) {
-        sb->num_extended_item_types--;
+    if (!sb->type_emitted[extended_index]) {
+      if (sb->num_items + 2 > DD_SNAPSHOT_MAX_ITEMS ||
+          current_total + 2 * sizeof(int) + 2 * sizeof(dd_snap_item) + 16 + (size_t)size > DD_SNAPSHOT_MAX_SIZE) {
         return NULL;
       }
 
@@ -1477,6 +1495,7 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
       } else {
         memset(uuid_data, 0, 16);
       }
+      sb->type_emitted[extended_index] = true;
     }
 
     final_type = DD_SNAPSHOT_MAX_TYPE - extended_index;
