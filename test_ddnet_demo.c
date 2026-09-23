@@ -1,3 +1,6 @@
+// The checks call the functions under test inside assert(), so they must run
+// in release builds too.
+#undef NDEBUG
 #include <assert.h>
 #include <limits.h>
 #include <stdio.h>

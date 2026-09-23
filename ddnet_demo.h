@@ -889,6 +889,9 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f);
 dd_demo_info *demo_r_get_info(dd_demo_reader *dr);
 bool demo_r_next_chunk(dd_demo_reader *dr, dd_demo_chunk *chunk);
 int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpacked_snap);
+/* Copies the map embedded in the demo (info->map_size bytes) into `out`.
+ * Can be called at any time after demo_r_open; the chunk position is kept. */
+bool demo_r_read_map(dd_demo_reader *dr, uint8_t *out, uint32_t out_size);
 
 /* Snapshot Builder API */
 dd_snapshot_builder *demo_sb_create(void);
@@ -931,9 +934,9 @@ bool demo_w_write_msg_sv_record(dd_demo_writer *dw, int server_time_best, int pl
 
 #endif /* DDNET_DEMO_H */
 
-#define DDNET_DEMO_IMPLEMENTATION
 #ifdef DDNET_DEMO_IMPLEMENTATION
-#undef DDNET_DEMO_IMPLEMENTATION
+#ifndef DDNET_DEMO_IMPLEMENTED
+#define DDNET_DEMO_IMPLEMENTED
 
 #include <limits.h>
 #include <stddef.h>
@@ -996,13 +999,15 @@ static void dd_uint_to_be(uint8_t *data, uint32_t val) {
   data[3] = val & 0xFF;
 }
 
-#if defined(_WIN32) || defined(_WIN64)
-#define dd_fseek _fseeki64
-#define dd_ftell _ftelli64
-#else
-#define dd_fseek fseeko
-#define dd_ftell ftello
-#endif
+/* Skips forward with plain fseek, in steps a 32-bit long can hold. */
+static bool dd_skip(FILE *f, uint32_t bytes) {
+  while (bytes > 0) {
+    const uint32_t step = bytes > (1u << 30) ? (1u << 30) : bytes;
+    if (fseek(f, (long)step, SEEK_CUR) != 0) return false;
+    bytes -= step;
+  }
+  return true;
+}
 
 /* string utilities */
 static void dd_str_timestamp(char *buffer, size_t buffer_size) {
@@ -1512,6 +1517,24 @@ void *demo_sb_add_item(dd_snapshot_builder *sb, int type, int id, int size) {
   return p_data;
 }
 
+/* Adds an item exactly as given. demo_sb_add_item translates the library's
+ * extended type enums into snapshot types for writing; a reader rebuilding a
+ * recorded snapshot must not, or raw extended types (servers number them from
+ * 0x4000 or from 0x7fff down) get registered a second time. */
+static void *dd_sb_add_raw_item(dd_snapshot_builder *sb, int type, int id, int size) {
+  if (sb->num_items >= DD_SNAPSHOT_MAX_ITEMS) return NULL;
+  size_t current_total = sizeof(dd_snapshot) + sizeof(int) * (size_t)sb->num_items + (size_t)sb->data_size;
+  if (current_total + sizeof(int) + sizeof(dd_snap_item) + (size_t)size > DD_SNAPSHOT_MAX_SIZE) return NULL;
+  dd_snap_item *obj = (dd_snap_item *)(sb->data + sb->data_size);
+  obj->type_and_id = (type << 16) | id;
+  sb->offsets[sb->num_items] = sb->data_size;
+  sb->data_size += sizeof(dd_snap_item) + size;
+  sb->num_items++;
+  void *p_data = (void *)dd_snap_item_data(obj);
+  memset(p_data, 0, size);
+  return p_data;
+}
+
 int demo_sb_finish(dd_snapshot_builder *sb, void *snap_data) {
   dd_snapshot *snap = (dd_snapshot *)snap_data;
   snap->data_size = sb->data_size;
@@ -1796,6 +1819,7 @@ bool demo_w_finish(dd_demo_writer *dw) {
 struct dd_demo_reader {
   FILE *file;
   dd_demo_info info;
+  fpos_t map_pos;
   int current_tick;
   uint8_t chunk_data[DD_SNAPSHOT_MAX_SIZE];
   uint8_t last_snapshot_data[DD_SNAPSHOT_MAX_SIZE];
@@ -1842,8 +1866,8 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f) {
     }
   }
 
-  int64_t pos_after_header = dd_ftell(f);
-  if (pos_after_header == -1L) return false;
+  fpos_t pos_after_header;
+  if (fgetpos(f, &pos_after_header) != 0) return false;
 
   uint8_t uuid[16];
   size_t read_bytes = fread(uuid, 1, sizeof(uuid), f);
@@ -1851,12 +1875,22 @@ bool demo_r_open(dd_demo_reader *dr, FILE *f) {
     dr->info.has_sha256 = fread(dr->info.map_sha256, 32, 1, f) == 1;
   } else {
     dr->info.has_sha256 = false;
-    dd_fseek(f, pos_after_header, SEEK_SET);
+    if (fsetpos(f, &pos_after_header) != 0) return false;
   }
 
-  dd_fseek(f, dr->info.map_size, SEEK_CUR);
+  if (fgetpos(f, &dr->map_pos) != 0) return false;
+  if (!dd_skip(f, dr->info.map_size)) return false;
 
   return true;
+}
+
+bool demo_r_read_map(dd_demo_reader *dr, uint8_t *out, uint32_t out_size) {
+  if (!dr || !dr->file || !out || out_size < dr->info.map_size || dr->info.map_size == 0) return false;
+  fpos_t resume;
+  if (fgetpos(dr->file, &resume) != 0) return false;
+  bool ok = fsetpos(dr->file, &dr->map_pos) == 0 && fread(out, 1, dr->info.map_size, dr->file) == dr->info.map_size;
+  if (fsetpos(dr->file, &resume) != 0) ok = false;
+  return ok;
 }
 
 dd_demo_info *demo_r_get_info(dd_demo_reader *dr) { return &dr->info; }
@@ -1972,7 +2006,7 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpack
 
     if (!is_updated) {
       int item_size = dd_snap_get_item_size(from, i);
-      void *obj = demo_sb_add_item(sb, dd_snap_item_type(from_item), dd_snap_item_id(from_item), item_size);
+      void *obj = dd_sb_add_raw_item(sb, dd_snap_item_type(from_item), dd_snap_item_id(from_item), item_size);
       if (obj) memcpy(obj, dd_snap_item_data(from_item), item_size);
     }
   }
@@ -1991,7 +2025,7 @@ int demo_r_unpack_delta(dd_demo_reader *dr, const void *delta_data, void *unpack
     }
 
     const dd_snap_item *from_item = dd_snap_find_item(from, type, id);
-    void *new_data = demo_sb_add_item(sb, type, id, item_size);
+    void *new_data = dd_sb_add_raw_item(sb, type, id, item_size);
     if (!new_data) {
       p += item_size / 4;
       continue;
@@ -2176,4 +2210,5 @@ bool demo_w_write_msg_sv_record(dd_demo_writer *dw, int server_time_best, int pl
   return (size >= 0) && demo_w_write_msg(dw, buffer, size);
 }
 
+#endif /* DDNET_DEMO_IMPLEMENTED */
 #endif /* DDNET_DEMO_IMPLEMENTATION */
