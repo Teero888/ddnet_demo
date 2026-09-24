@@ -884,7 +884,7 @@ static bool dd_rc_read_demo(dd_demo_state *st, FILE *f, char *error, size_t erro
     }
   }
 
-  static uint8_t unpacked[DD_SNAPSHOT_MAX_SIZE];
+  static DD_THREAD_LOCAL uint8_t unpacked[DD_SNAPSHOT_MAX_SIZE];
   dd_demo_chunk chunk;
   int tick = 0;
   bool ok = true;
@@ -1560,7 +1560,7 @@ typedef struct {
   dd_player_input input;
 } dd_rc_known;
 
-static dd_rc_known dd_rc_joint_table[DD_RC_JOINT_MAX_TICKS + 3][DD_STATE_MAX_CLIENTS];
+static DD_THREAD_LOCAL dd_rc_known dd_rc_joint_table[DD_RC_JOINT_MAX_TICKS + 3][DD_STATE_MAX_CLIENTS];
 
 static void dd_rc_joint_fill_table(const dd_demo_state *st, int ta, int end) {
   for (int tick = ta - 1; tick <= end && tick - (ta - 1) < DD_RC_JOINT_MAX_TICKS + 3; ++tick) {
@@ -2789,7 +2789,7 @@ static bool dd_rc_crossed_unfreeze(dd_demo_state *st, int cid, int tick) {
   if (dd_rc_core_at(st, cid, tick - 2, &from, NULL, true) == DD_QUALITY_NONE ||
       dd_rc_core_at(st, cid, tick - 1, &to, NULL, true) == DD_QUALITY_NONE)
     return false;
-  static int indices[DD_MAX_MAP_INDICES];
+  static DD_THREAD_LOCAL int indices[DD_MAX_MAP_INDICES];
   const dd_vec2 to_pos = dd_v2((float)to.m_X, (float)to.m_Y);
   int count = dd_col_get_map_indices(&st->col, dd_v2((float)from.m_X, (float)from.m_Y), to_pos, indices);
   if (count == 0) {
@@ -2871,7 +2871,7 @@ static void dd_rc_fill_character(dd_demo_state *st, int cid, int tick, dd_state_
   c->strong_weak_id = extras->ddnet.m_StrongWeakId;
 }
 
-bool dd_demo_state_get(dd_demo_state *st, int tick, dd_state_tick *out) {
+static bool dd_rc_get(dd_demo_state *st, int tick, dd_state_tick *out, bool characters) {
   memset(out, 0, sizeof(*out));
   if (tick < st->first_tick || tick > st->last_tick) return false;
   out->tick = tick;
@@ -2913,6 +2913,7 @@ bool dd_demo_state_get(dd_demo_state *st, int tick, dd_state_tick *out) {
     out->num_messages = end - lo;
   }
 
+  if (!characters) return true;
   const dd_rc_teams_entry *teams = dd_rc_teams_at(st, tick);
   for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
     /* player info */
@@ -2928,6 +2929,10 @@ bool dd_demo_state_get(dd_demo_state *st, int tick, dd_state_tick *out) {
   }
   return true;
 }
+
+bool dd_demo_state_get(dd_demo_state *st, int tick, dd_state_tick *out) { return dd_rc_get(st, tick, out, true); }
+
+bool dd_demo_state_entities(dd_demo_state *st, int tick, dd_state_tick *out) { return dd_rc_get(st, tick, out, false); }
 
 bool dd_demo_state_characters(dd_demo_state *st, int tick, dd_state_character out[DD_STATE_MAX_CLIENTS]) {
   if (tick < st->first_tick || tick > st->last_tick) {

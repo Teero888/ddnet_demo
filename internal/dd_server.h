@@ -26,6 +26,18 @@
 #error "include internal/dd_physics.h before internal/dd_server.h"
 #endif
 
+/* Scratch buffers too big for the stack are per thread: several demos may
+ * load at once, each on its own thread. */
+#ifndef DD_THREAD_LOCAL
+#if defined(_MSC_VER)
+#define DD_THREAD_LOCAL __declspec(thread)
+#elif defined(__cplusplus)
+#define DD_THREAD_LOCAL thread_local
+#else
+#define DD_THREAD_LOCAL _Thread_local
+#endif
+#endif
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC optimize("fp-contract=off")
@@ -1325,7 +1337,7 @@ static void dd_chr_ddrace_post_core_tick(dd_server *s, dd_character *c) {
   dd_chr_handle_skippable_tiles(s, c, current_index);
   if (!c->alive) return;
 
-  static int indices[DD_MAX_MAP_INDICES];
+  static DD_THREAD_LOCAL int indices[DD_MAX_MAP_INDICES];
   int count = dd_col_get_map_indices(s->col, c->prev_pos, dd_chr_pos(s, c), indices);
   if (count > 0) {
     for (int i = 0; i < count; ++i) {

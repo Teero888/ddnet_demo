@@ -233,6 +233,10 @@ int dd_demo_state_last_tick(const dd_demo_state *state);
  * this state or dd_demo_state_free. Returns false outside the demo. */
 bool dd_demo_state_get(dd_demo_state *state, int tick, dd_state_tick *out);
 
+/* dd_demo_state_get without the players and characters, which are most of
+ * its cost: entities, events, messages and game info only. */
+bool dd_demo_state_entities(dd_demo_state *state, int tick, dd_state_tick *out);
+
 /* Only the characters at `tick`, as in dd_demo_state_get; cheap enough to ask
  * for neighbouring ticks every frame. Returns false outside the demo. */
 bool dd_demo_state_characters(dd_demo_state *state, int tick, dd_state_character out[DD_STATE_MAX_CLIENTS]);
