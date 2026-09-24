@@ -2476,7 +2476,7 @@ static void dd_rc_attribute_owners(dd_demo_state *st) {
  * them), tied to the demo's bytes. Bump the version whenever solving can
  * produce a different result, so stale caches are rebuilt. */
 #define DD_RC_CACHE_MAGIC "DDRCACHE"
-#define DD_RC_CACHE_VERSION 2u
+#define DD_RC_CACHE_VERSION 3u /* 3: closest points clamp to the segment, like DDNet */
 
 static uint64_t dd_rc_file_hash(const char *path, bool *ok) {
   uint64_t h = 1469598103934665603ULL; /* FNV-1a */
@@ -2774,6 +2774,55 @@ static void dd_rc_display_aim(const dd_demo_state *st, int cid, int tick, float 
 }
 
 /* One character's state at `tick`; quality NONE when it is not there. */
+/* The extras of a tick come from the last snapshot at or before it, but the
+ * core does not: the server re-syncs it on the tick it changes, and that can
+ * lie before the next snapshot. A tee frozen since before `tick` has its input
+ * cleared, so its core shows no direction and no hook; when it shows either,
+ * it was unfrozen since those extras were sent (a hammer, most often, fired
+ * from a tee that ticks first), and the next snapshot has its freeze as it is. */
+/* Whether HandleTiles unfroze the tee at `tick`: it walks the tiles the
+ * previous tick's move crossed, from the position two ticks back to the one a
+ * tick back, after the core ticked (CCharacter::DDRacePostCoreTick). */
+static bool dd_rc_crossed_unfreeze(dd_demo_state *st, int cid, int tick) {
+  if (!st->have_world) return false;
+  dd_netobj_character_core from, to;
+  if (dd_rc_core_at(st, cid, tick - 2, &from, NULL, true) == DD_QUALITY_NONE ||
+      dd_rc_core_at(st, cid, tick - 1, &to, NULL, true) == DD_QUALITY_NONE)
+    return false;
+  static int indices[DD_MAX_MAP_INDICES];
+  const dd_vec2 to_pos = dd_v2((float)to.m_X, (float)to.m_Y);
+  int count = dd_col_get_map_indices(&st->col, dd_v2((float)from.m_X, (float)from.m_Y), to_pos, indices);
+  if (count == 0) {
+    indices[0] = dd_col_get_pure_map_index(&st->col, to_pos.x, to_pos.y);
+    count = 1;
+  }
+  for (int i = 0; i < count; ++i)
+    if (dd_col_get_tile_index(&st->col, indices[i]) == DD_TILE_UNFREEZE || dd_col_get_front_tile_index(&st->col, indices[i]) == DD_TILE_UNFREEZE)
+      return true;
+  return false;
+}
+
+/* The extras of a tick come from the last snapshot at or before it, while the
+ * tee may have been unfrozen since; the next snapshot has its freeze as it is.
+ * A tee frozen since before `tick` was unfrozen by then when
+ *  - its core shows input, which freeze clears (no direction, no hook): the
+ *    server re-synced the core on the tick it changed, which can lie before
+ *    the next snapshot (a hammer, most often, from a tee that ticks first);
+ *  - it crossed an unfreeze tile in the previous tick's move. */
+static const dd_rc_anchor *dd_rc_freeze_extras(dd_demo_state *st, int cid, int tick, const dd_rc_anchor *extras,
+                                               const dd_netobj_character_core *core) {
+  const int end = extras->ddnet.m_FreezeEnd;
+  if (!((end == -1 || end > tick) && extras->ddnet.m_FreezeStart < tick)) return extras;
+  const dd_rc_track *t = &st->tracks[cid];
+  const int k = (int)(extras - t->anchors);
+  if (k < 0 || k + 1 >= t->count) return extras;
+  const dd_rc_anchor *next = &t->anchors[k + 1];
+  if (!next->has_ddnet || next->snap_tick <= tick || next->ddnet.m_FreezeEnd != 0) return extras;
+  const bool input = core->m_Direction != 0 || (core->m_HookState != DD_HOOK_IDLE && core->m_HookState != DD_HOOK_RETRACTED);
+  /* unfreeze tiles leave deep freeze alone */
+  return input || (end != -1 && dd_rc_crossed_unfreeze(st, cid, tick)) ? next : extras;
+}
+
 static void dd_rc_fill_character(dd_demo_state *st, int cid, int tick, dd_state_character *c) {
   memset(c, 0, sizeof(*c));
   dd_netobj_character_core core;
@@ -2810,8 +2859,9 @@ static void dd_rc_fill_character(dd_demo_state *st, int cid, int tick, dd_state_
   if (!extras->has_ddnet) return;
   c->has_ddnet_info = true;
   c->flags = (unsigned)extras->ddnet.m_Flags;
-  c->freeze_end = extras->ddnet.m_FreezeEnd;
-  c->freeze_start = extras->ddnet.m_FreezeStart;
+  const dd_rc_anchor *freeze = dd_rc_freeze_extras(st, cid, tick, extras, &core);
+  c->freeze_end = freeze->ddnet.m_FreezeEnd;
+  c->freeze_start = freeze->ddnet.m_FreezeStart;
   c->jumps = extras->ddnet.m_Jumps;
   c->jumped_total = extras->ddnet.m_JumpedTotal;
   c->tele_checkpoint = extras->ddnet.m_TeleCheckpoint;

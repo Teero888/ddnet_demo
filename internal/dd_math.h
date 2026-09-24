@@ -76,10 +76,11 @@ static inline bool dd_closest_point_on_line(dd_vec2 line_a, dd_vec2 line_b, dd_v
     dd_vec2 ap = dd_v2_sub(target, line_a);
     float ap_dot_ab = dd_v2_dot(ap, ab);
     float t = ap_dot_ab / squared_magnitude_ab;
-    if (t >= 0.0f && t <= 1.0f) {
-      *out = dd_v2_add(line_a, dd_v2_mul(ab, t));
-      return true;
-    }
+    /* DDNet clamps to the segment: a target just past an end is measured from that end */
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    *out = dd_v2_add(line_a, dd_v2_mul(ab, t));
+    return true;
   }
   return false;
 }
