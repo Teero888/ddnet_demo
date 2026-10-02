@@ -25,6 +25,7 @@
 #error "include ddnet_demo.h before ddnet_demo_state.h's implementation"
 #endif
 
+#include <limits.h>
 #include "dd_physics.h"
 #include "dd_server.h"
 
@@ -2372,39 +2373,6 @@ static int dd_rc_nearest_tee_around(const dd_demo_state *st, int tick, dd_vec2 a
   return now >= 0 ? now : dd_rc_nearest_tee(st, tick - 1, at, radius);
 }
 
-/* The tee near `at` that fired at a snapshot's tick or the one before (its
- * attack tick, as the snapshots around say), -1 if none. */
-static int dd_rc_shooter(const dd_demo_state *st, int tick, dd_vec2 at, float radius) {
-  int best = -1;
-  float best_distance = radius;
-  for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
-    if (st->tracks[cid].count == 0) continue;
-    bool fired = false;
-    for (int q = tick; q <= tick + 2 && !fired; ++q) {
-      dd_netobj_character_core core;
-      const dd_rc_anchor *anchor = NULL;
-      if (dd_rc_core_at(st, cid, q, &core, &anchor, true) == DD_QUALITY_NONE || !anchor) continue;
-      fired = anchor->chr.m_AttackTick >= tick - 1 && anchor->chr.m_AttackTick <= tick;
-    }
-    if (!fired) continue;
-    for (int q = tick; q >= tick - 1; --q) {
-      dd_netobj_character_core core;
-      if (dd_rc_core_at(st, cid, q, &core, NULL, true) == DD_QUALITY_NONE) continue;
-      const float distance = dd_v2_distance(dd_v2((float)core.m_X, (float)core.m_Y), at);
-      if (distance < best_distance) {
-        best_distance = distance;
-        best = cid;
-      }
-    }
-  }
-  return best;
-}
-
-static bool dd_rc_fire_sound(int sound_id) {
-  return sound_id == DD_SOUND_GUN_FIRE || sound_id == DD_SOUND_SHOTGUN_FIRE || sound_id == DD_SOUND_GRENADE_FIRE ||
-         sound_id == DD_SOUND_HAMMER_FIRE || sound_id == DD_SOUND_NINJA_FIRE || sound_id == DD_SOUND_LASER_FIRE;
-}
-
 /* The same entity in the previous snapshot: same item id, and for projectiles the same shot. */
 static int dd_rc_previous_projectile(const dd_demo_state *st, const dd_rc_snap *prev, int id, const dd_state_projectile *p) {
   for (int k = 0; prev && k < prev->num_proj; ++k) {
@@ -2420,29 +2388,185 @@ static int dd_rc_previous_laser(const dd_demo_state *st, const dd_rc_snap *prev,
   return -1;
 }
 
-/* Fills in the owners the demo did not send. Shots belong to the tee they
- * started at (DDNet fires them from 3/4 of a tee's radius off its centre),
- * and keep that owner for as long as the entity lives. Explosions belong to
- * the grenade that burst there, other events to the nearest tee, else to a
- * shot passing by. A sound made with an event (a death, an explosion: DDNet
- * plays them at the same place) belongs to that event's owner, and a weapon's
- * sound to the tee that fired then. What cannot be told belongs to the
- * world. */
+/* A tee a search found, or DD_RC_OWNER_UNKNOWN for none (-1). */
+#define DD_RC_FOUND(cid) ((cid) >= 0 ? (cid) : DD_RC_OWNER_UNKNOWN)
+
+/* The tee near `at` that attacked in ticks [from, to] (its attack tick, as
+ * the snapshots after say), holding `weapon` then unless that is -1; the
+ * nearest, where it stood when it attacked. -1 if none. */
+static int dd_rc_attacker(const dd_demo_state *st, int from, int to, int weapon, dd_vec2 at, float radius) {
+  int best = -1;
+  float best_distance = radius;
+  for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
+    if (st->tracks[cid].count == 0) continue;
+    int attack = INT_MIN;
+    for (int q = from; q <= to + 2 && attack == INT_MIN; ++q) {
+      dd_netobj_character_core core;
+      const dd_rc_anchor *anchor = NULL;
+      if (dd_rc_core_at(st, cid, q, &core, &anchor, false) == DD_QUALITY_NONE || !anchor) continue;
+      if (anchor->chr.m_AttackTick < from || anchor->chr.m_AttackTick > to) continue;
+      if (weapon >= 0 && anchor->chr.m_Weapon != weapon) continue;
+      attack = anchor->chr.m_AttackTick;
+    }
+    if (attack == INT_MIN) continue;
+    dd_netobj_character_core core;
+    if (dd_rc_core_at(st, cid, attack, &core, NULL, true) == DD_QUALITY_NONE &&
+        dd_rc_core_at(st, cid, attack - 1, &core, NULL, true) == DD_QUALITY_NONE)
+      continue;
+    const float distance = dd_v2_distance(dd_v2((float)core.m_X, (float)core.m_Y), at);
+    if (distance < best_distance) {
+      best_distance = distance;
+      best = cid;
+    }
+  }
+  return best;
+}
+
+/* The tee near `at` that appeared in ticks [from, to] (none the tick before). */
+static int dd_rc_appeared(const dd_demo_state *st, int from, int to, dd_vec2 at, float radius) {
+  int best = -1;
+  float best_distance = radius;
+  for (int cid = 0; cid < DD_STATE_MAX_CLIENTS; ++cid) {
+    if (st->tracks[cid].count == 0) continue;
+    for (int q = from; q <= to; ++q) {
+      dd_netobj_character_core core;
+      if (dd_rc_core_at(st, cid, q - 1, &core, NULL, false) != DD_QUALITY_NONE) continue;
+      if (dd_rc_core_at(st, cid, q, &core, NULL, true) == DD_QUALITY_NONE) continue;
+      const float distance = dd_v2_distance(dd_v2((float)core.m_X, (float)core.m_Y), at);
+      if (distance < best_distance) {
+        best_distance = distance;
+        best = cid;
+      }
+      break;
+    }
+  }
+  return best;
+}
+
+/* Whether a projectile is in snapshot `n` (same item id, same shot). */
+static bool dd_rc_snap_has_projectile(const dd_demo_state *st, const dd_rc_snap *n, int id, const dd_state_projectile *p) {
+  for (int c = 0; n && c < n->num_proj; ++c)
+    if (st->projectile_ids[n->proj0 + c] == id && st->projectiles[n->proj0 + c].start_tick == p->start_tick) return true;
+  return false;
+}
+
+/* A projectile of snapshot `si` or the one before that is gone in the next
+ * one and came within `radius` of `at` on its way: what burst or hit there.
+ * (The snapshot of the tick a shot ends in still holds it, with its event.)
+ * Its owner, or DD_RC_OWNER_UNKNOWN for none. `explosive`: a grenade or an
+ * explosive shot, else a gun's bullet. */
+static int dd_rc_vanished_shot(const dd_demo_state *st, int si, dd_vec2 at, float radius, bool explosive) {
+  const dd_rc_snap *s = &st->snaps[si];
+  const dd_rc_snap *prev = si > 0 ? &st->snaps[si - 1] : NULL;
+  const dd_rc_snap *next = si + 1 < st->num_snaps ? &st->snaps[si + 1] : NULL;
+  int owner = DD_RC_OWNER_UNKNOWN;
+  float best = radius;
+  for (int from = 0; from < 2; ++from) {
+    const dd_rc_snap *where = from == 0 ? s : prev;
+    for (int q = 0; where && q < where->num_proj; ++q) {
+      const dd_state_projectile *g = &st->projectiles[where->proj0 + q];
+      const int id = st->projectile_ids[where->proj0 + q];
+      if (explosive ? g->type != DD_WEAPON_ID_GRENADE && !g->explosive : g->type != DD_WEAPON_ID_GUN) continue;
+      if (dd_rc_snap_has_projectile(st, next, id, g)) continue;
+      if (where == prev && dd_rc_snap_has_projectile(st, s, id, g)) continue; /* (looked at already) */
+      /* where it went since the last snapshot showed it (sparse in a replay
+         demo): its last second at most */
+      const int since = g->start_tick > s->tick - DD_SERVER_TICK_SPEED ? g->start_tick : s->tick - DD_SERVER_TICK_SPEED;
+      for (int tick = since; tick <= s->tick; ++tick) {
+        const float distance = dd_v2_distance(dd_rc_projectile_pos(st, g, tick), at);
+        if (distance < best) {
+          best = distance;
+          owner = g->owner;
+        }
+      }
+    }
+  }
+  return owner;
+}
+
+/* A laser of this snapshot or one beside it with an end at `at`: the one that
+ * bounced there. Its owner, or DD_RC_OWNER_UNKNOWN for none. */
+static int dd_rc_laser_at(const dd_demo_state *st, int si, dd_vec2 at, float radius) {
+  int owner = DD_RC_OWNER_UNKNOWN;
+  float best = radius;
+  for (int n = si - 1; n <= si + 1; ++n) {
+    if (n < 0 || n >= st->num_snaps) continue;
+    const dd_rc_snap *s = &st->snaps[n];
+    for (int k = 0; k < s->num_laser; ++k) {
+      const dd_state_laser *l = &st->lasers[s->laser0 + k];
+      const float distance = fminf(dd_v2_distance(dd_v2(l->from_x, l->from_y), at), dd_v2_distance(dd_v2(l->to_x, l->to_y), at));
+      if (distance < best || (distance == best && n == si)) {
+        best = distance;
+        owner = l->owner;
+      }
+    }
+  }
+  return owner;
+}
+
+/* The weapon whose firing makes a sound, -1 for another sound. */
+static int dd_rc_fired_weapon(int sound_id) {
+  switch (sound_id) {
+  case DD_SOUND_GUN_FIRE: return DD_WEAPON_ID_GUN;
+  case DD_SOUND_SHOTGUN_FIRE: return DD_WEAPON_ID_SHOTGUN;
+  case DD_SOUND_GRENADE_FIRE: return DD_WEAPON_ID_GRENADE;
+  case DD_SOUND_HAMMER_FIRE: return DD_WEAPON_ID_HAMMER;
+  case DD_SOUND_NINJA_FIRE: return DD_WEAPON_ID_NINJA;
+  case DD_SOUND_LASER_FIRE: return DD_WEAPON_ID_LASER;
+  default: return -1;
+  }
+}
+
+/* The event a sound is made with, at the same place (DDNet's server creates
+ * them together), or -1. */
+static int dd_rc_partner_event(int sound_id) {
+  switch (sound_id) {
+  case DD_SOUND_PLAYER_DIE: return DD_STATE_EVENT_DEATH;
+  case DD_SOUND_GRENADE_EXPLODE: return DD_STATE_EVENT_EXPLOSION;
+  case DD_SOUND_PLAYER_SPAWN: return DD_STATE_EVENT_SPAWN;
+  case DD_SOUND_HAMMER_HIT: return DD_STATE_EVENT_HAMMERHIT;
+  default: return -1;
+  }
+}
+
+/* The owner of a shot the demo did not say: the tee that fired it then (as
+ * its attack tick and weapon say), else the one it started at. */
+static int dd_rc_shot_owner(const dd_demo_state *st, int start_tick, int weapon, dd_vec2 at) {
+  int owner = dd_rc_attacker(st, start_tick - 1, start_tick, weapon, at, 64.f);
+  if (owner < 0) owner = dd_rc_nearest_tee(st, start_tick, at, 48.f);
+  if (owner < 0) owner = dd_rc_nearest_tee(st, start_tick - 1, at, 48.f);
+  return owner;
+}
+
+/* Fills in the owners the demo did not send, as DDNet's server makes each
+ * thing (its CreateSound, CreateExplosion, CreateDamageInd... calls):
+ *   - shots belong to the tee that fired them then, and keep that owner for
+ *     as long as they live;
+ *   - an explosion to the grenade that burst there, or for a grenade no
+ *     snapshot showed, the tee that just fired one beside it (a rocket jump);
+ *   - a ring of stars where no tee is, to the bullet that hit the wall there;
+ *     other stars (freeze and ninja countdowns) to the tee they count for;
+ *   - a hammer hit to the tee that swung, a spawn to the tee that appeared, a
+ *     death to the tee that died;
+ *   - a sound made with one of those (a death, an explosion, a spawn, a hit)
+ *     to its event's owner, a laser's bounce to the laser, a weapon's sound to
+ *     the tee that fired it, other sounds to the tee they are at.
+ * What belongs to the map (turrets, doors: the server's owner -1) stays the
+ * world's, -1; what belongs to a player the demo does not show, or cannot be
+ * told, is DD_STATE_OWNER_UNKNOWN. */
 static void dd_rc_attribute_owners(dd_demo_state *st) {
   for (int si = 0; si < st->num_snaps; ++si) {
     const dd_rc_snap *s = &st->snaps[si];
     const dd_rc_snap *prev = si > 0 ? &st->snaps[si - 1] : NULL;
+    /* the ticks whose events this snapshot carries */
+    const int first = prev && prev->tick + 1 > s->tick - 2 ? prev->tick + 1 : s->tick - 2;
     for (int k = 0; k < s->num_proj; ++k) {
       dd_state_projectile *p = &st->projectiles[s->proj0 + k];
       if (p->owner != DD_RC_OWNER_UNKNOWN) continue;
       const int before = dd_rc_previous_projectile(st, prev, st->projectile_ids[s->proj0 + k], p);
-      if (before >= 0) {
-        p->owner = st->projectiles[before].owner;
-        continue;
-      }
-      int owner = dd_rc_nearest_tee(st, p->start_tick, dd_v2(p->x, p->y), 48.f);
-      if (owner < 0) owner = dd_rc_nearest_tee(st, p->start_tick - 1, dd_v2(p->x, p->y), 48.f);
-      p->owner = owner;
+      /* only players fire these: one no tee fired is a player's the demo does not show */
+      p->owner = before >= 0 ? st->projectiles[before].owner
+                             : DD_RC_FOUND(dd_rc_shot_owner(st, p->start_tick, p->type, dd_v2(p->x, p->y)));
     }
     for (int k = 0; k < s->num_laser; ++k) {
       dd_state_laser *l = &st->lasers[s->laser0 + k];
@@ -2453,80 +2577,82 @@ static void dd_rc_attribute_owners(dd_demo_state *st) {
         l->owner = st->lasers[before].owner;
         continue;
       }
-      int owner = dd_rc_nearest_tee(st, l->start_tick, dd_v2(l->from_x, l->from_y), 48.f);
-      if (owner < 0) owner = dd_rc_nearest_tee(st, l->start_tick - 1, dd_v2(l->from_x, l->from_y), 48.f);
-      l->owner = owner;
+      /* a plain laser no tee fired is the map's (a door, a dragger) */
+      const int owner = dd_rc_shot_owner(st, l->start_tick, -1, dd_v2(l->from_x, l->from_y));
+      l->owner = owner >= 0 ? owner : -1;
     }
     for (int k = 0; k < s->num_event; ++k) {
       dd_state_event *e = &st->events[s->event0 + k];
       if (e->owner != DD_RC_OWNER_UNKNOWN || e->type == DD_STATE_EVENT_SOUND_WORLD) continue;
       const dd_vec2 at = dd_v2(e->x, e->y);
-      int owner = -1;
-      if (e->type == DD_STATE_EVENT_DEATH) {
-        owner = e->client_id >= 0 && e->client_id < DD_STATE_MAX_CLIENTS ? e->client_id : -1;
-      } else if (e->type == DD_STATE_EVENT_EXPLOSION) {
-        /* a grenade of the snapshot before that is gone now, near enough to have burst here */
-        float best = 96.f;
-        for (int q = 0; prev && q < prev->num_proj; ++q) {
-          const dd_state_projectile *g = &st->projectiles[prev->proj0 + q];
-          if (g->type != DD_WEAPON_ID_GRENADE && !g->explosive) continue;
-          bool still_there = false;
-          for (int c = 0; c < s->num_proj && !still_there; ++c)
-            still_there = st->projectile_ids[s->proj0 + c] == st->projectile_ids[prev->proj0 + q] &&
-                          st->projectiles[s->proj0 + c].start_tick == g->start_tick;
-          if (still_there) continue;
-          for (int tick = prev->tick; tick <= s->tick; ++tick) {
-            const float distance = dd_v2_distance(dd_rc_projectile_pos(st, g, tick), at);
-            if (distance < best) {
-              best = distance;
-              owner = g->owner;
-            }
+      int owner = DD_RC_OWNER_UNKNOWN;
+      switch (e->type) {
+      case DD_STATE_EVENT_DEATH:
+        if (e->client_id >= 0 && e->client_id < DD_STATE_MAX_CLIENTS) owner = e->client_id;
+        break;
+      case DD_STATE_EVENT_EXPLOSION:
+        owner = dd_rc_vanished_shot(st, si, at, 96.f, true);
+        if (owner == DD_RC_OWNER_UNKNOWN) {
+          /* the map's plasma bursts too */
+          for (int q = 0; prev && q < prev->num_laser && owner == DD_RC_OWNER_UNKNOWN; ++q) {
+            const dd_state_laser *l = &st->lasers[prev->laser0 + q];
+            if ((l->type == DD_LASERTYPE_PLASMA || l->type == DD_LASERTYPE_GUN) &&
+                dd_v2_distance(dd_v2(l->to_x, l->to_y), at) < 96.f)
+              owner = l->owner;
           }
         }
-        /* a grenade that burst before any snapshot showed it: a rocket jump, next to its shooter */
-        if (owner < 0) owner = dd_rc_nearest_tee_around(st, s->tick, at, 96.f);
-      } else {
-        owner = dd_rc_nearest_tee_around(st, s->tick, at, 64.f);
-        if (owner < 0) {
-          float best = 64.f;
-          for (int q = 0; q < s->num_proj; ++q) {
-            const dd_state_projectile *p = &st->projectiles[s->proj0 + q];
-            const float distance = dd_v2_distance(dd_rc_projectile_pos(st, p, s->tick), at);
-            if (distance < best) {
-              best = distance;
-              owner = p->owner;
-            }
-          }
-        }
+        if (owner == DD_RC_OWNER_UNKNOWN) owner = DD_RC_FOUND(dd_rc_attacker(st, first - 1, s->tick, DD_WEAPON_ID_GRENADE, at, 96.f));
+        break;
+      case DD_STATE_EVENT_DAMAGE_IND:
+        /* a bullet that hit a wall (ten stars around where it hit), else a countdown at a tee */
+        owner = dd_rc_vanished_shot(st, si, at, 48.f, false);
+        if (owner == DD_RC_OWNER_UNKNOWN) owner = DD_RC_FOUND(dd_rc_nearest_tee_around(st, s->tick, at, 64.f));
+        if (owner == DD_RC_OWNER_UNKNOWN) owner = DD_RC_FOUND(dd_rc_attacker(st, first - 1, s->tick, DD_WEAPON_ID_GUN, at, 128.f));
+        break;
+      case DD_STATE_EVENT_HAMMERHIT:
+        owner = DD_RC_FOUND(dd_rc_attacker(st, first - 1, s->tick, DD_WEAPON_ID_HAMMER, at, 96.f));
+        if (owner == DD_RC_OWNER_UNKNOWN) owner = DD_RC_FOUND(dd_rc_nearest_tee_around(st, s->tick, at, 64.f));
+        break;
+      case DD_STATE_EVENT_SPAWN:
+        owner = DD_RC_FOUND(dd_rc_appeared(st, first, s->tick + 1, at, 64.f));
+        if (owner == DD_RC_OWNER_UNKNOWN) owner = DD_RC_FOUND(dd_rc_nearest_tee_around(st, s->tick, at, 64.f));
+        break;
+      case DD_STATE_EVENT_SOUND_GLOBAL:
+      case DD_STATE_EVENT_MAP_SOUND_WORLD:
+        owner = -1;
+        break;
+      default:
+        owner = DD_RC_FOUND(dd_rc_nearest_tee_around(st, s->tick, at, 64.f));
+        break;
       }
       e->owner = owner;
     }
     /* the sounds, once the other events have their owners */
     for (int k = 0; k < s->num_event; ++k) {
       dd_state_event *e = &st->events[s->event0 + k];
-      if (e->owner != DD_RC_OWNER_UNKNOWN) continue;
+      if (e->owner != DD_RC_OWNER_UNKNOWN || e->type != DD_STATE_EVENT_SOUND_WORLD) continue;
       const dd_vec2 at = dd_v2(e->x, e->y);
-      int owner = -1;
-      for (int j = 0; j < s->num_event && owner < 0; ++j) {
+      int owner = DD_RC_OWNER_UNKNOWN;
+      bool decided = false;
+      const int partner = dd_rc_partner_event(e->sound_id);
+      for (int j = 0; partner >= 0 && j < s->num_event && !decided; ++j) {
         const dd_state_event *o = &st->events[s->event0 + j];
-        if (o->type != DD_STATE_EVENT_DEATH && o->type != DD_STATE_EVENT_EXPLOSION) continue;
-        if ((o->type == DD_STATE_EVENT_DEATH) != (e->sound_id == DD_SOUND_PLAYER_DIE)) continue;
-        if (o->type == DD_STATE_EVENT_EXPLOSION && e->sound_id != DD_SOUND_GRENADE_EXPLODE) continue;
-        if (dd_v2_distance(dd_v2(o->x, o->y), at) < 1.f && o->owner >= 0) owner = o->owner;
-      }
-      if (owner < 0 && dd_rc_fire_sound(e->sound_id)) owner = dd_rc_shooter(st, s->tick, at, 64.f);
-      if (owner < 0) owner = dd_rc_nearest_tee_around(st, s->tick, at, 64.f);
-      if (owner < 0) {
-        float best = 64.f;
-        for (int q = 0; q < s->num_proj; ++q) {
-          const dd_state_projectile *p = &st->projectiles[s->proj0 + q];
-          const float distance = dd_v2_distance(dd_rc_projectile_pos(st, p, s->tick), at);
-          if (distance < best) {
-            best = distance;
-            owner = p->owner;
-          }
+        if ((int)o->type == partner && dd_v2_distance(dd_v2(o->x, o->y), at) < 1.f) {
+          owner = o->owner;
+          decided = true;
         }
       }
+      if (!decided && e->sound_id == DD_SOUND_LASER_BOUNCE) {
+        owner = dd_rc_laser_at(st, si, at, 8.f);
+        decided = owner != DD_RC_OWNER_UNKNOWN;
+      }
+      const int weapon = dd_rc_fired_weapon(e->sound_id);
+      if (!decided && weapon >= 0) {
+        owner = dd_rc_attacker(st, first - 1, s->tick, weapon, at, 64.f);
+        if (owner < 0) owner = dd_rc_attacker(st, first - 1, s->tick, -1, at, 64.f);
+        decided = owner >= 0;
+      }
+      if (!decided) owner = DD_RC_FOUND(dd_rc_nearest_tee_around(st, s->tick, at, 64.f));
       e->owner = owner;
     }
   }
@@ -2540,7 +2666,7 @@ static void dd_rc_attribute_owners(dd_demo_state *st) {
  * them), tied to the demo's bytes. Bump the version whenever solving can
  * produce a different result, so stale caches are rebuilt. */
 #define DD_RC_CACHE_MAGIC "DDRCACHE"
-#define DD_RC_CACHE_VERSION 4u /* 3: closest points clamp to the segment, like DDNet; 4: sounds owned by their events and shooters */
+#define DD_RC_CACHE_VERSION 4u /* 3: closest points clamp to the segment, like DDNet; 4: owners as DDNet's server makes each thing, DD_STATE_OWNER_UNKNOWN */
 
 static uint64_t dd_rc_file_hash(const char *path, bool *ok) {
   uint64_t h = 1469598103934665603ULL; /* FNV-1a */

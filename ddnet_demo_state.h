@@ -88,10 +88,15 @@ typedef struct {
 /* Projectiles are described by where and when they started, like on the net:
  * the position at a tick follows from DDNet's CalcPos with the tuning.
  * `owner`, for projectiles, lasers and events alike, is the client it belongs
- * to, or -1 for the world's own (map turrets, door lasers) and anything that
- * cannot be told. Where the demo does not say, it is the tee that stood where
- * a shot started, the grenade that burst where an explosion is (else the tee
- * next to it: a rocket jump), or the tee nearest to an event. */
+ * to, DD_STATE_OWNER_WORLD for the map's own (turrets, doors, draggers), or
+ * DD_STATE_OWNER_UNKNOWN for a player the demo does not show and anything
+ * that cannot be told. Where the demo does not say, it is worked out as
+ * DDNet's server makes each thing: the tee that fired a shot (its attack tick
+ * and weapon), the grenade that burst where an explosion is, the bullet that
+ * hit the wall where a ring of stars is, the laser that bounced where its
+ * sound is, the event a sound is made with, else the tee it is at. */
+#define DD_STATE_OWNER_WORLD (-1)
+#define DD_STATE_OWNER_UNKNOWN (-2)
 typedef struct {
   float x, y, vel_x, vel_y;
   int type, start_tick, owner, switch_number, tune_zone;
