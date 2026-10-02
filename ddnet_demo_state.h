@@ -253,6 +253,23 @@ int dd_state_tuning_count(void);
 const char *dd_state_tuning_name(int index);
 bool dd_demo_state_tuning(const dd_demo_state *state, int tick, int zone, float *out);
 
+/* A sound a character's own motion made. */
+typedef struct {
+  int client_id;
+  int sound_id; /* DD_SOUND_*: PLAYER_JUMP, PLAYER_AIRJUMP, HOOK_ATTACH_GROUND, HOOK_ATTACH_PLAYER or HOOK_NOATTACH */
+  float x, y;   /* where the character is at the tick */
+} dd_state_sound;
+
+/* The sounds the characters' motion made in the step that reached `tick`, as
+ * DDNet's physics raises them: ground and air jumps, and the hook taking hold
+ * of the ground or a player or glancing off unhookable ground. They are worked
+ * out from the reconstructed characters, so they come when and where the
+ * motion does, for every player. The demo's own copies of these come late, by
+ * the recording player's ping, and the recording player's own are missing:
+ * its client heard them from its prediction. Writes at most `max`, returns
+ * how many. */
+int dd_demo_state_sounds(dd_demo_state *state, int tick, dd_state_sound *out, int max);
+
 /* Every message of the demo, in tick order, as dd_demo_state_get hands them
  * out tick by tick. Valid until dd_demo_state_free. */
 const dd_state_message *dd_demo_state_messages(const dd_demo_state *state, int *count);

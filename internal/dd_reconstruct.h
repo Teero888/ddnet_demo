@@ -2963,6 +2963,46 @@ bool dd_demo_state_player(const dd_demo_state *st, int tick, int client_id, dd_s
 }
 
 int dd_state_tuning_count(void) { return DD_TUNING_NUM; }
+/* A jump bit rising is a jump: from the ground when the tee stood on it as
+ * the step began (the core lets go of the air-jump bit again on the ground),
+ * else in the air when the air-jump bit rose with it. A hook that holds on
+ * took hold of a player or the ground; one that turns back at a no-hook tile
+ * on its way glanced off it. */
+int dd_demo_state_sounds(dd_demo_state *st, int tick, dd_state_sound *out, int max) {
+  if (!st || !out || max <= 0 || tick <= st->first_tick || tick > st->last_tick || !st->have_map) return 0;
+  int n = 0;
+  for (int cid = 0; cid < DD_STATE_MAX_CLIENTS && n < max; ++cid) {
+    if (st->tracks[cid].count == 0) continue;
+    dd_netobj_character_core a, b;
+    if (dd_rc_core_at(st, cid, tick - 1, &a, NULL, true) == DD_QUALITY_NONE) continue;
+    if (dd_rc_core_at(st, cid, tick, &b, NULL, true) == DD_QUALITY_NONE) continue;
+    const dd_vec2 from = dd_v2((float)a.m_X, (float)a.m_Y), at = dd_v2((float)b.m_X, (float)b.m_Y);
+    /* a spawn or a teleport is no motion to hear */
+    if (dd_v2_distance(from, at) > 128.f) continue;
+    int sounds[2], count = 0;
+    if ((b.m_Jumped & 1) && !(a.m_Jumped & 1)) {
+      if (dd_col_is_on_ground(&st->col, from, dd_physical_size))
+        sounds[count++] = DD_SOUND_PLAYER_JUMP;
+      else if ((b.m_Jumped & 2) && !(a.m_Jumped & 2))
+        sounds[count++] = DD_SOUND_PLAYER_AIRJUMP;
+    }
+    /* Between snapshots a tee is followed without its input, so a hook it fired
+     * and that took hold before the next one shows up held at once. */
+    if (a.m_HookState != DD_HOOK_GRABBED && b.m_HookState == DD_HOOK_GRABBED) {
+      sounds[count++] = b.m_HookedPlayer >= 0 ? DD_SOUND_HOOK_ATTACH_PLAYER : DD_SOUND_HOOK_ATTACH_GROUND;
+    } else if (a.m_HookState != DD_HOOK_RETRACT_START && b.m_HookState == DD_HOOK_RETRACT_START) {
+      const dd_vec2 dir = dd_v2((float)b.m_HookDx / 256.f, (float)b.m_HookDy / 256.f);
+      const dd_vec2 past = dd_v2_add(dd_v2((float)b.m_HookX, (float)b.m_HookY), dd_v2_mul(dir, 4.f));
+      if (dd_col_intersect_line_tele_hook(&st->col, dd_v2((float)a.m_HookX, (float)a.m_HookY), past, NULL, NULL, NULL) ==
+          DD_TILE_NOHOOK)
+        sounds[count++] = DD_SOUND_HOOK_NOATTACH;
+    }
+    for (int i = 0; i < count && n < max; ++i)
+      out[n++] = (dd_state_sound){.client_id = cid, .sound_id = sounds[i], .x = at.x, .y = at.y};
+  }
+  return n;
+}
+
 const char *dd_state_tuning_name(int index) { return index >= 0 && index < DD_TUNING_NUM ? dd_tuning_names[index] : NULL; }
 
 bool dd_demo_state_tuning(const dd_demo_state *st, int tick, int zone, float *out) {
