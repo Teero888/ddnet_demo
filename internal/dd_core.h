@@ -13,8 +13,11 @@
 #endif
 
 #define DD_PHYS_TEAM_FLOCK 0
-#define DD_PHYS_TEAM_SUPER DD_PHYS_MAX_CLIENTS
-#define DD_PHYS_NUM_DDRACE_TEAMS (DD_PHYS_TEAM_SUPER + 1)
+/* Room for every team of a 128 player server. The super team is the last of
+ * a world's num_ddrace_teams: 128 where the server says so (GameInfoEx), else
+ * 64, like DDNet's client falls back to for servers before 128 players. */
+#define DD_PHYS_NUM_DDRACE_TEAMS (DD_PHYS_MAX_CLIENTS + 1)
+#define DD_PHYS_LEGACY_NUM_DDRACE_TEAMS (64 + 1)
 #define DD_PHYS_NUM_WEAPONS 6
 
 enum {
@@ -36,7 +39,7 @@ typedef struct {
 static inline int dd_teams_super(const dd_teams_core *teams) { return teams->num_ddrace_teams - 1; }
 
 static void dd_teams_reset(dd_teams_core *teams) {
-  teams->num_ddrace_teams = DD_PHYS_NUM_DDRACE_TEAMS;
+  teams->num_ddrace_teams = DD_PHYS_LEGACY_NUM_DDRACE_TEAMS;
   for (int i = 0; i < DD_PHYS_MAX_CLIENTS; ++i) {
     teams->team[i] = DD_PHYS_TEAM_FLOCK;
     teams->is_solo[i] = false;
@@ -74,10 +77,13 @@ typedef struct {
  * is 0, which is also what an empty reckoning world returns. */
 typedef int (*dd_random_fn)(void *user, int below_this);
 
+/* one bit per client */
+#define DD_PHYS_MASK_WORDS (DD_PHYS_MAX_CLIENTS / 64)
+
 struct dd_character_core;
 typedef struct {
   struct dd_character_core *characters[DD_PHYS_MAX_CLIENTS];
-  uint64_t occupied; /* bit i: characters[i] is set; keep it with dd_world_set_character */
+  uint64_t occupied[DD_PHYS_MASK_WORDS]; /* bit i: characters[i] is set; keep it with dd_world_set_character */
   dd_switcher *switchers; /* highest switch number + 1 entries, or NULL */
   int num_switchers;
   dd_random_fn random;
@@ -86,10 +92,8 @@ typedef struct {
 
 static void dd_world_set_character(dd_world_core *world, int id, struct dd_character_core *core) {
   world->characters[id] = core;
-  if (core)
-    world->occupied |= (uint64_t)1 << id;
-  else
-    world->occupied &= ~((uint64_t)1 << id);
+  if (core) world->occupied[id / 64] |= (uint64_t)1 << (id % 64);
+  else world->occupied[id / 64] &= ~((uint64_t)1 << (id % 64));
 }
 
 /* The lowest set bit's index; `mask` must not be 0. Walking a mask with this
@@ -370,22 +374,23 @@ static void dd_core_tick(dd_character_core *core, bool use_input, bool do_deferr
     if (!core->hook_hit_disabled && core->world && dd_tune(tuning->player_hooking) != 0.0f &&
         (core->hook_state == DD_HOOK_FLYING || !core->new_hook)) {
       float distance = 0.0f;
-      for (uint64_t left = core->world->occupied; left; left &= left - 1) {
-        const int i = dd_lowest_bit(left);
-        dd_character_core *other = core->world->characters[i];
-        if (!other || other == core ||
-            (!(core->is_super || other->is_super) &&
-             ((core->id != -1 && !dd_teams_can_collide(core->teams, i, core->id)) || other->solo || core->solo)))
-          continue;
+      for (int word = 0; word < DD_PHYS_MASK_WORDS; ++word) {
+        for (uint64_t left = core->world->occupied[word]; left; left &= left - 1) {
+          const int i = word * 64 + dd_lowest_bit(left);
+          dd_character_core *other = core->world->characters[i];
+          if (!other || other == core ||
+              (!(core->is_super || other->is_super) && ((core->id != -1 && !dd_teams_can_collide(core->teams, i, core->id)) || other->solo || core->solo)))
+            continue;
 
-        dd_vec2 closest_point;
-        if (dd_closest_point_on_line(core->hook_pos, new_pos, other->pos, &closest_point)) {
-          if (dd_v2_distance(other->pos, closest_point) < dd_physical_size + 2.0f) {
-            if (core->hooked_player == -1 || dd_v2_distance(core->hook_pos, other->pos) < distance) {
-              core->triggered_events |= DD_COREEVENT_HOOK_ATTACH_PLAYER;
-              core->hook_state = DD_HOOK_GRABBED;
-              dd_core_set_hooked_player(core, i);
-              distance = dd_v2_distance(core->hook_pos, other->pos);
+          dd_vec2 closest_point;
+          if (dd_closest_point_on_line(core->hook_pos, new_pos, other->pos, &closest_point)) {
+            if (dd_v2_distance(other->pos, closest_point) < dd_physical_size + 2.0f) {
+              if (core->hooked_player == -1 || dd_v2_distance(core->hook_pos, other->pos) < distance) {
+                core->triggered_events |= DD_COREEVENT_HOOK_ATTACH_PLAYER;
+                core->hook_state = DD_HOOK_GRABBED;
+                dd_core_set_hooked_player(core, i);
+                distance = dd_v2_distance(core->hook_pos, other->pos);
+              }
             }
           }
         }
@@ -459,48 +464,50 @@ static void dd_core_tick(dd_character_core *core, bool use_input, bool do_deferr
 static void dd_core_tick_deferred(dd_character_core *core) {
   const dd_tuning *tuning = &core->tuning;
   if (core->world) {
-    for (uint64_t left = core->world->occupied; left; left &= left - 1) {
-      const int i = dd_lowest_bit(left);
-      dd_character_core *other = core->world->characters[i];
-      if (!other) continue;
-      if (other == core || (core->id != -1 && !dd_teams_can_collide(core->teams, core->id, i))) continue;
-      if (!(core->is_super || other->is_super) && (core->solo || other->solo)) continue;
+    for (int word = 0; word < DD_PHYS_MASK_WORDS; ++word) {
+      for (uint64_t left = core->world->occupied[word]; left; left &= left - 1) {
+        const int i = word * 64 + dd_lowest_bit(left);
+        dd_character_core *other = core->world->characters[i];
+        if (!other) continue;
+        if (other == core || (core->id != -1 && !dd_teams_can_collide(core->teams, core->id, i))) continue;
+        if (!(core->is_super || other->is_super) && (core->solo || other->solo)) continue;
 
-      /* Not hooked and clearly out of collision range: nothing below can
-       * apply (distance >= |dx|, |dy| holds for the float sqrt too). */
-      if (core->hooked_player != i) {
-        dd_vec2 d = dd_v2_sub(core->pos, other->pos);
-        if (fabsf(d.x) > dd_physical_size * 1.5f || fabsf(d.y) > dd_physical_size * 1.5f) continue;
-      }
-
-      float distance = dd_v2_distance(core->pos, other->pos);
-      if (distance > 0) {
-        dd_vec2 dir = dd_v2_normalize(dd_v2_sub(core->pos, other->pos));
-
-        bool can_collide = (core->is_super || other->is_super) ||
-                           (!core->collision_disabled && !other->collision_disabled && dd_tune(tuning->player_collision) != 0.0f);
-
-        if (can_collide && distance < dd_physical_size * 1.25f) {
-          float a = (dd_physical_size * 1.45f - distance);
-          float velocity = 0.5f;
-          if (dd_v2_length(core->vel) > 0.0001f) velocity = 1 - (dd_v2_dot(dd_v2_normalize(core->vel), dir) + 1) / 2;
-
-          core->vel = dd_v2_add(core->vel, dd_v2_mul(dd_v2_mul(dir, a), velocity * 0.75f));
-          core->vel = dd_v2_mul(core->vel, 0.85f);
+        /* Not hooked and clearly out of collision range: nothing below can
+         * apply (distance >= |dx|, |dy| holds for the float sqrt too). */
+        if (core->hooked_player != i) {
+          dd_vec2 d = dd_v2_sub(core->pos, other->pos);
+          if (fabsf(d.x) > dd_physical_size * 1.5f || fabsf(d.y) > dd_physical_size * 1.5f) continue;
         }
 
-        if (!core->hook_hit_disabled && core->hooked_player == i && dd_tune(tuning->player_hooking) != 0.0f) {
-          if (distance > dd_physical_size * 1.50f) {
-            float hook_accel = dd_tune(tuning->hook_drag_accel) * (distance / dd_tune(tuning->hook_length));
-            float drag_speed = dd_tune(tuning->hook_drag_speed);
+        float distance = dd_v2_distance(core->pos, other->pos);
+        if (distance > 0) {
+          dd_vec2 dir = dd_v2_normalize(dd_v2_sub(core->pos, other->pos));
 
-            dd_vec2 temp;
-            temp.x = dd_saturated_add(-drag_speed, drag_speed, other->vel.x, hook_accel * dir.x * 1.5f);
-            temp.y = dd_saturated_add(-drag_speed, drag_speed, other->vel.y, hook_accel * dir.y * 1.5f);
-            other->vel = dd_clamp_vel(other->move_restrictions, temp);
-            temp.x = dd_saturated_add(-drag_speed, drag_speed, core->vel.x, -hook_accel * dir.x * 0.25f);
-            temp.y = dd_saturated_add(-drag_speed, drag_speed, core->vel.y, -hook_accel * dir.y * 0.25f);
-            core->vel = dd_clamp_vel(core->move_restrictions, temp);
+          bool can_collide =
+              (core->is_super || other->is_super) || (!core->collision_disabled && !other->collision_disabled && dd_tune(tuning->player_collision) != 0.0f);
+
+          if (can_collide && distance < dd_physical_size * 1.25f) {
+            float a = (dd_physical_size * 1.45f - distance);
+            float velocity = 0.5f;
+            if (dd_v2_length(core->vel) > 0.0001f) velocity = 1 - (dd_v2_dot(dd_v2_normalize(core->vel), dir) + 1) / 2;
+
+            core->vel = dd_v2_add(core->vel, dd_v2_mul(dd_v2_mul(dir, a), velocity * 0.75f));
+            core->vel = dd_v2_mul(core->vel, 0.85f);
+          }
+
+          if (!core->hook_hit_disabled && core->hooked_player == i && dd_tune(tuning->player_hooking) != 0.0f) {
+            if (distance > dd_physical_size * 1.50f) {
+              float hook_accel = dd_tune(tuning->hook_drag_accel) * (distance / dd_tune(tuning->hook_length));
+              float drag_speed = dd_tune(tuning->hook_drag_speed);
+
+              dd_vec2 temp;
+              temp.x = dd_saturated_add(-drag_speed, drag_speed, other->vel.x, hook_accel * dir.x * 1.5f);
+              temp.y = dd_saturated_add(-drag_speed, drag_speed, other->vel.y, hook_accel * dir.y * 1.5f);
+              other->vel = dd_clamp_vel(other->move_restrictions, temp);
+              temp.x = dd_saturated_add(-drag_speed, drag_speed, core->vel.x, -hook_accel * dir.x * 0.25f);
+              temp.y = dd_saturated_add(-drag_speed, drag_speed, core->vel.y, -hook_accel * dir.y * 0.25f);
+              core->vel = dd_clamp_vel(core->move_restrictions, temp);
+            }
           }
         }
       }
@@ -556,15 +563,17 @@ static void dd_core_move(dd_character_core *core) {
       const float min_y = dd_minf(core->pos.y, new_pos.y) - reach, max_y = dd_maxf(core->pos.y, new_pos.y) + reach;
       const dd_character_core *candidates[DD_PHYS_MAX_CLIENTS];
       int num_candidates = 0;
-      for (uint64_t left = core->world->occupied; left; left &= left - 1) {
-        const int p = dd_lowest_bit(left);
-        const dd_character_core *other = core->world->characters[p];
-        if (!other || other == core) continue;
-        if ((!(other->is_super || core->is_super) &&
-             (core->solo || other->solo || other->collision_disabled || (core->id != -1 && !dd_teams_can_collide(core->teams, core->id, p)))))
-          continue;
-        if (other->pos.x < min_x || other->pos.x > max_x || other->pos.y < min_y || other->pos.y > max_y) continue;
-        candidates[num_candidates++] = other;
+      for (int word = 0; word < DD_PHYS_MASK_WORDS; ++word) {
+        for (uint64_t left = core->world->occupied[word]; left; left &= left - 1) {
+          const int p = word * 64 + dd_lowest_bit(left);
+          const dd_character_core *other = core->world->characters[p];
+          if (!other || other == core) continue;
+          if ((!(other->is_super || core->is_super) &&
+               (core->solo || other->solo || other->collision_disabled || (core->id != -1 && !dd_teams_can_collide(core->teams, core->id, p)))))
+            continue;
+          if (other->pos.x < min_x || other->pos.x > max_x || other->pos.y < min_y || other->pos.y > max_y) continue;
+          candidates[num_candidates++] = other;
+        }
       }
       if (num_candidates > 0) {
         int end = (int)(distance + 1);

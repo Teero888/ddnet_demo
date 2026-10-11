@@ -24,7 +24,7 @@
 #pragma clang fp contract(off)
 #endif
 
-#define DD_PHYS_MAX_CLIENTS 64
+#define DD_PHYS_MAX_CLIENTS 128
 #define DD_PHYS_SERVER_TICK_SPEED 50
 
 typedef struct {

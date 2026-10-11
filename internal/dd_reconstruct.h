@@ -185,6 +185,7 @@ typedef struct {
   int local_client_id;
   bool has_game_info;
   dd_netobj_game_info game_info;
+  int num_ddrace_teams; /* as GameInfoEx says, 0 when it does not */
   bool has_switch_state;
   dd_netobj_switch_state switch_state;
 } dd_rc_snap;
@@ -207,7 +208,7 @@ typedef struct {
 typedef struct {
   int tick;
   int team[DD_STATE_MAX_CLIENTS];
-  int num_ddrace_teams;
+  int num_ddrace_teams; /* 0: as the snapshots say */
 } dd_rc_teams_entry;
 
 typedef struct {
@@ -453,7 +454,7 @@ static bool dd_rc_read_message(dd_demo_state *st, int tick, const uint8_t *data,
       }
     }
     /* like the client: 16-player servers have a smaller super team */
-    t->num_ddrace_teams = i <= 16 ? 16 + 1 : DD_PHYS_NUM_DDRACE_TEAMS;
+    t->num_ddrace_teams = i <= 16 ? 16 + 1 : 0;
     st->num_teams++;
   } break;
   case DD_RC_EX_MSG_DDRACETIME:
@@ -602,6 +603,13 @@ static bool dd_rc_read_snapshot(dd_demo_state *st, int tick, const dd_snapshot *
       if (dd_rc_item_fits(snap, i, sizeof(dd_netobj_game_info))) {
         s->has_game_info = true;
         s->game_info = *(const dd_netobj_game_info *)data;
+      }
+      break;
+    case 1000 + DD_RC_EX_GAMEINFOEX:
+      /* m_NumDDRaceTeams, sent from version 12 on, after m_MinTeamSize and m_MaxTeamSize */
+      if (dd_rc_item_fits(snap, i, sizeof(int) * 6)) {
+        const int *d = (const int *)data;
+        if (d[1] >= 12 && d[5] > DD_PHYS_TEAM_FLOCK + 1 && d[5] <= DD_PHYS_NUM_DDRACE_TEAMS) s->num_ddrace_teams = d[5];
       }
       break;
     case 1000 + DD_RC_EX_SWITCHSTATE:
@@ -1285,10 +1293,11 @@ static bool dd_rc_seed_world(const dd_demo_state *st, dd_server *w, int tick, in
   w->num_events = 0;
 
   const dd_rc_teams_entry *teams = dd_rc_teams_at(st, tick - 1);
-  if (teams) {
+  if (teams)
     for (int i = 0; i < DD_STATE_MAX_CLIENTS; ++i) w->teams.team[i] = teams->team[i];
-    w->teams.num_ddrace_teams = teams->num_ddrace_teams;
-  }
+  const dd_rc_snap *snap = dd_rc_snap_at(st, tick - 1);
+  if (teams && teams->num_ddrace_teams) w->teams.num_ddrace_teams = teams->num_ddrace_teams;
+  else if (snap && snap->num_ddrace_teams) w->teams.num_ddrace_teams = snap->num_ddrace_teams;
   /* tune params describe the recording player's zone; without a tune layer
    * that is the global tuning */
   if (!st->col.tune_type) {
@@ -1299,7 +1308,6 @@ static bool dd_rc_seed_world(const dd_demo_state *st, dd_server *w, int tick, in
       }
     if (st->snap_tuning_jitter) dd_rc_unjitter(&w->tuning[0]);
   }
-  const dd_rc_snap *snap = dd_rc_snap_at(st, tick - 1);
   if (snap && snap->has_switch_state) {
     for (int n = 0; n < w->core.num_switchers && n <= snap->switch_state.m_HighestSwitchNumber && n < 256; ++n) {
       const bool on = (snap->switch_state.m_aStatus[n / 32] >> (n % 32)) & 1;
@@ -2666,7 +2674,10 @@ static void dd_rc_attribute_owners(dd_demo_state *st) {
  * them), tied to the demo's bytes. Bump the version whenever solving can
  * produce a different result, so stale caches are rebuilt. */
 #define DD_RC_CACHE_MAGIC "DDRCACHE"
-#define DD_RC_CACHE_VERSION 4u /* 3: closest points clamp to the segment, like DDNet; 4: owners as DDNet's server makes each thing, DD_STATE_OWNER_UNKNOWN */
+/* 3: closest points clamp to the segment, like DDNet; 4: owners as DDNet's
+ * server makes each thing, DD_STATE_OWNER_UNKNOWN; 5: 128 clients, the super
+ * team as the server says */
+#define DD_RC_CACHE_VERSION 5u
 
 static uint64_t dd_rc_file_hash(const char *path, bool *ok) {
   uint64_t h = 1469598103934665603ULL; /* FNV-1a */

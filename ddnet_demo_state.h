@@ -34,7 +34,7 @@
 extern "C" {
 #endif
 
-#define DD_STATE_MAX_CLIENTS 64
+#define DD_STATE_MAX_CLIENTS 128
 #define DD_STATE_TICK_SPEED 50
 
 typedef enum {

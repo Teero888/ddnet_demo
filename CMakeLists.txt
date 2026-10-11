@@ -20,7 +20,7 @@ if(EXAMPLES)
   add_executable(example_read example_read.c)
   add_executable(test_ddnet_demo test_ddnet_demo.c)
   # Reconstruction tests against real demos; they use the internal physics.
-  foreach(test_name test_reckoning test_coverage test_state test_cache)
+  foreach(test_name test_reckoning test_coverage test_state test_cache test_clients)
     add_executable(${test_name} ${test_name}.c)
     target_link_libraries(${test_name} PRIVATE ddnet_demo ddnet_map_loader)
     if(UNIX)

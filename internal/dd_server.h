@@ -314,7 +314,7 @@ typedef struct {
 
   /* for dd_server_restore: character slots and entities in use at some
    * point since the last dd_server_copy this world descends from */
-  uint64_t chars_touched;
+  uint64_t chars_touched[DD_PHYS_MASK_WORDS];
   int ent_high;
 } dd_server;
 
@@ -949,7 +949,7 @@ static bool dd_switch_status(const dd_server *s, int number, int team) {
 static bool dd_chr_switch_active_cb(unsigned char number, void *user) {
   dd_server *s = ((dd_server **)user)[0];
   dd_character *c = ((dd_character **)user)[1];
-  return s->core.num_switchers > 0 && dd_chr_team(s, c) != DD_PHYS_TEAM_SUPER && dd_switch_status(s, number, dd_chr_team(s, c));
+  return s->core.num_switchers > 0 && dd_chr_team(s, c) != dd_teams_super(&s->teams) && dd_switch_status(s, number, dd_chr_team(s, c));
 }
 
 /* CGameControllerDDNet::HandleCharacterTiles: start, finish, solo */
@@ -1112,35 +1112,35 @@ static void dd_chr_handle_tiles(dd_server *s, dd_character *c, int index) {
   const int switch_delay = dd_col_get_switch_delay(col, map_index);
   const int team = dd_chr_team(s, c);
   dd_switcher *sw = switch_number < s->core.num_switchers ? &s->core.switchers[switch_number] : NULL;
-  if (switch_type == DD_TILE_SWITCHOPEN && team != DD_PHYS_TEAM_SUPER && switch_number > 0 && sw) {
+  if (switch_type == DD_TILE_SWITCHOPEN && team != dd_teams_super(&s->teams) && switch_number > 0 && sw) {
     sw->status[team] = true;
     sw->end_tick[team] = 0;
     sw->type[team] = DD_TILE_SWITCHOPEN;
     sw->last_update_tick[team] = s->tick;
-  } else if (switch_type == DD_TILE_SWITCHTIMEDOPEN && team != DD_PHYS_TEAM_SUPER && switch_number > 0 && sw) {
+  } else if (switch_type == DD_TILE_SWITCHTIMEDOPEN && team != dd_teams_super(&s->teams) && switch_number > 0 && sw) {
     sw->status[team] = true;
     sw->end_tick[team] = s->tick + 1 + switch_delay * DD_SERVER_TICK_SPEED;
     sw->type[team] = DD_TILE_SWITCHTIMEDOPEN;
     sw->last_update_tick[team] = s->tick;
-  } else if (switch_type == DD_TILE_SWITCHTIMEDCLOSE && team != DD_PHYS_TEAM_SUPER && switch_number > 0 && sw) {
+  } else if (switch_type == DD_TILE_SWITCHTIMEDCLOSE && team != dd_teams_super(&s->teams) && switch_number > 0 && sw) {
     sw->status[team] = false;
     sw->end_tick[team] = s->tick + 1 + switch_delay * DD_SERVER_TICK_SPEED;
     sw->type[team] = DD_TILE_SWITCHTIMEDCLOSE;
     sw->last_update_tick[team] = s->tick;
-  } else if (switch_type == DD_TILE_SWITCHCLOSE && team != DD_PHYS_TEAM_SUPER && switch_number > 0 && sw) {
+  } else if (switch_type == DD_TILE_SWITCHCLOSE && team != dd_teams_super(&s->teams) && switch_number > 0 && sw) {
     sw->status[team] = false;
     sw->end_tick[team] = 0;
     sw->type[team] = DD_TILE_SWITCHCLOSE;
     sw->last_update_tick[team] = s->tick;
-  } else if (switch_type == DD_TILE_FREEZE && team != DD_PHYS_TEAM_SUPER && !core->invincible) {
+  } else if (switch_type == DD_TILE_FREEZE && team != dd_teams_super(&s->teams) && !core->invincible) {
     if (switch_number == 0 || dd_switch_status(s, switch_number, team)) dd_chr_freeze_for(s, c, switch_delay);
-  } else if (switch_type == DD_TILE_DFREEZE && team != DD_PHYS_TEAM_SUPER && !core->invincible) {
+  } else if (switch_type == DD_TILE_DFREEZE && team != dd_teams_super(&s->teams) && !core->invincible) {
     if (switch_number == 0 || dd_switch_status(s, switch_number, team)) core->deep_frozen = true;
-  } else if (switch_type == DD_TILE_DUNFREEZE && team != DD_PHYS_TEAM_SUPER && !core->invincible) {
+  } else if (switch_type == DD_TILE_DUNFREEZE && team != dd_teams_super(&s->teams) && !core->invincible) {
     if (switch_number == 0 || dd_switch_status(s, switch_number, team)) core->deep_frozen = false;
-  } else if (switch_type == DD_TILE_LFREEZE && team != DD_PHYS_TEAM_SUPER && !core->invincible) {
+  } else if (switch_type == DD_TILE_LFREEZE && team != dd_teams_super(&s->teams) && !core->invincible) {
     if (switch_number == 0 || dd_switch_status(s, switch_number, team)) core->live_frozen = true;
-  } else if (switch_type == DD_TILE_LUNFREEZE && team != DD_PHYS_TEAM_SUPER && !core->invincible) {
+  } else if (switch_type == DD_TILE_LUNFREEZE && team != dd_teams_super(&s->teams) && !core->invincible) {
     if (switch_number == 0 || dd_switch_status(s, switch_number, team)) core->live_frozen = false;
   } else if (switch_type == DD_TILE_HIT_ENABLE && core->hammer_hit_disabled && switch_delay == DD_WEAPON_ID_HAMMER) {
     core->hammer_hit_disabled = false;
@@ -1406,7 +1406,7 @@ static void dd_chr_tick_deferred(dd_server *s, dd_character *c) {
 static dd_character *dd_server_spawn_character(dd_server *s, int cid, dd_vec2 pos) {
   dd_character *c = &s->chars[cid];
   memset(c, 0, sizeof(*c));
-  s->chars_touched |= (uint64_t)1 << cid;
+  s->chars_touched[cid / 64] |= (uint64_t)1 << (cid % 64);
   c->ent = dd_ent_alloc(s, DD_ENT_CHARACTER, DD_ENTTYPE_CHARACTER, pos, dd_physical_size);
   if (c->ent < 0) return NULL;
   s->ents[c->ent].u.character = cid;
@@ -1483,7 +1483,7 @@ static void dd_server_create_explosion(dd_server *s, dd_vec2 pos, int owner, int
 
       int player_team = dd_chr_team(s, chr);
       if ((owner_chr ? owner_chr->core.grenade_hit_disabled : !s->cfg.sv_hit) || no_damage) {
-        if (player_team == DD_PHYS_TEAM_SUPER) continue;
+        if (player_team == dd_teams_super(&s->teams)) continue;
         if (team_done[player_team]) continue;
         team_done[player_team] = true;
       }
@@ -1923,7 +1923,7 @@ static void dd_pickup_tick(dd_server *s, int index) {
     dd_character *chr = &s->chars[s->ents[ents[i]].u.character];
     if (!chr->alive) continue;
     if (e->u.pickup.layer == DD_LAYER_SWITCH && e->u.pickup.number > 0 && !dd_switch_status(s, e->u.pickup.number, dd_chr_team(s, chr))) continue;
-    const bool super = dd_chr_team(s, chr) == DD_PHYS_TEAM_SUPER;
+    const bool super = dd_chr_team(s, chr) == dd_teams_super(&s->teams);
     dd_character_core *core = &chr->core;
     switch (e->u.pickup.type) {
     case DD_POWERUP_FREEZE: dd_chr_freeze(s, chr); break;
@@ -2038,7 +2038,7 @@ static void dd_dragger_look_for_players(dd_server *s, int index) {
   for (int i = 0; i < num; i++) {
     dd_character *target = &s->chars[s->ents[in_range[i]].u.character];
     const int target_team = dd_chr_team(s, target);
-    if (target_team == DD_PHYS_TEAM_SUPER) continue;
+    if (target_team == dd_teams_super(&s->teams)) continue;
     if (e->u.dragger.layer == DD_LAYER_SWITCH && e->u.dragger.number > 0 && !dd_switch_status(s, e->u.dragger.number, target_team)) continue;
     const dd_vec2 target_pos = dd_chr_pos(s, target);
     int is_reachable = e->u.dragger.ignore_walls ? !dd_col_intersect_no_laser_no_walls(s->col, e->pos, target_pos, NULL, NULL)
@@ -2147,7 +2147,7 @@ static void dd_plasma_tick(dd_server *s, int index) {
   /* HitCharacter */
   dd_vec2 intersect_pos;
   int hit = dd_intersect_character(s, e->pos, dd_v2_add(e->pos, e->u.plasma.core), 0.0f, &intersect_pos, -2, e->u.plasma.for_client_id, -1);
-  if (hit >= 0 && dd_teams_team(&s->teams, hit) != DD_PHYS_TEAM_SUPER) {
+  if (hit >= 0 && dd_teams_team(&s->teams, hit) != dd_teams_super(&s->teams)) {
     dd_character *hit_chr = &s->chars[hit];
     if (e->u.plasma.freeze)
       dd_chr_freeze(s, hit_chr);
@@ -2178,7 +2178,7 @@ static void dd_gun_fire(dd_server *s, int index) {
   for (int i = 0; i < num; i++) {
     dd_character *target = &s->chars[s->ents[in_range[i]].u.character];
     const int target_team = dd_chr_team(s, target);
-    if (target_team == DD_PHYS_TEAM_SUPER) continue;
+    if (target_team == dd_teams_super(&s->teams)) continue;
     if (e->u.gun.layer == DD_LAYER_SWITCH && e->u.gun.number > 0 && !dd_switch_status(s, e->u.gun.number, target_team)) continue;
     const int target_cid = dd_chr_cid(target);
     const bool target_is_solo = dd_teams_get_solo(&s->teams, target_cid);
@@ -2554,7 +2554,7 @@ static bool dd_server_copy(dd_server *dst, const dd_server *src) {
 
   memcpy(dst, src, sizeof(*dst));
   for (int i = 0; i < DD_PHYS_MAX_CLIENTS; ++i)
-    if (src->chars[i].alive) dst->chars_touched |= (uint64_t)1 << i;
+    if (src->chars[i].alive) dst->chars_touched[i / 64] |= (uint64_t)1 << (i % 64);
 
   if (old_capacity < src->ent_capacity) {
     dd_entity *grown = (dd_entity *)realloc(ents, sizeof(dd_entity) * (size_t)src->ent_capacity);
@@ -2606,19 +2606,21 @@ static bool dd_server_restore(dd_server *dst, const dd_server *src) {
   dd_vec2 *spawns[3] = {dst->spawn_points[0], dst->spawn_points[1], dst->spawn_points[2]};
   const int capacity = dst->ent_capacity;
 
-  uint64_t touched = src->chars_touched | dst->chars_touched;
+  uint64_t touched[DD_PHYS_MASK_WORDS];
+  for (int w = 0; w < DD_PHYS_MASK_WORDS; ++w)
+    touched[w] = src->chars_touched[w] | dst->chars_touched[w];
   for (int i = 0; i < DD_PHYS_MAX_CLIENTS; ++i)
-    if (src->chars[i].alive || dst->chars[i].alive) touched |= (uint64_t)1 << i;
+    if (src->chars[i].alive || dst->chars[i].alive) touched[i / 64] |= (uint64_t)1 << (i % 64);
   const int ent_high = dd_maxi(src->ent_high, dst->ent_high);
 
   memcpy(dst, src, offsetof(dd_server, tuning));
   memcpy(&dst->core, &src->core, offsetof(dd_server, chars) - offsetof(dd_server, core));
   for (int i = 0; i < DD_PHYS_MAX_CLIENTS; ++i)
-    if (touched & ((uint64_t)1 << i)) dst->chars[i] = src->chars[i];
+    if (touched[i / 64] & ((uint64_t)1 << (i % 64))) dst->chars[i] = src->chars[i];
   memcpy(&dst->players, &src->players, offsetof(dd_server, events) - offsetof(dd_server, players));
   memcpy(dst->events, src->events, sizeof(dst->events[0]) * (size_t)src->num_events);
   dst->num_events = src->num_events;
-  dst->chars_touched = touched;
+  memcpy(dst->chars_touched, touched, sizeof(touched));
   dst->ent_high = ent_high;
 
   const int copied = dd_mini(ent_high, src->ent_capacity);
